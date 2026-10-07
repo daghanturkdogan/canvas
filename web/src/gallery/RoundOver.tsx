@@ -1,17 +1,19 @@
 import type { PlayerInfo, RoundInfo } from '@gallery/shared';
 import { formatCountdown } from '../useNow';
+import { winnerLabel } from './teamBoard';
 
 interface Props { round: RoundInfo; winner: PlayerInfo | undefined; share: number; now: number }
 
 export function RoundOver({ round, winner, share, now }: Props) {
+  const label = winnerLabel(winner);
   return (
     <div className="round-over">
       <div className="round-over-stack">
         <div className="round-over-card">
           <div className="eyebrow">Round over</div>
-          {winner ? (
+          {label ? (
             <>
-              <div className="winner" style={{ color: winner.color }}>{winner.name}</div>
+              <div className="winner" style={{ color: label.color }}>{label.text}</div>
               <div className="winner-line">wins with {(share * 100).toFixed(1)}%</div>
             </>
           ) : (

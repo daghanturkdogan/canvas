@@ -6,10 +6,13 @@ import type { Op, ServerMsg, StrokeOp } from '@gallery/shared';
  * or after a refresh/reconnect, can replay the existing drawing from `snapshot()`.
  */
 export class OpLog {
+  /** Increases whenever the drawing changes, so layers can redraw only when needed. */
+  version = 0;
   private ops: Op[] = [];
   private strokes = new Map<string, StrokeOp>();
 
   apply(m: ServerMsg): void {
+    if (m.t === 'welcome' || m.t === 'stroke' || m.t === 'fill' || (m.t === 'round' && m.wipe)) this.version++;
     switch (m.t) {
       case 'welcome':
         this.ops = [];
@@ -35,6 +38,7 @@ export class OpLog {
 
   /** The local player's own points: the server never echoes a stroke back to its author. */
   addLocalPoints(pid: number, id: string, pts: number[]): void {
+    this.version++;
     this.addPoints(pid, id, pts);
   }
 

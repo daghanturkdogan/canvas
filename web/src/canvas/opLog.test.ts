@@ -80,4 +80,17 @@ describe('OpLog', () => {
     log.apply({ t: 'stroke', id: 'e', pid: 0, pts: [1, 1, 2, 2] });
     expect(log.snapshot()).toEqual([{ k: 's', id: 'e', pid: 0, pts: [1, 1, 2, 2] }]);
   });
+
+  it('bumps its version whenever the drawing changes, so layers can redraw cheaply', () => {
+    const log = new OpLog();
+    const v0 = log.version;
+    log.apply({ t: 'stroke', id: 'a', pid: 2, pts: [1, 1] });
+    const v1 = log.version;
+    log.addLocalPoints(1, 'mine', [5, 5]);
+    const v2 = log.version;
+    log.apply({ t: 'scores', shares: {} });
+    expect(v1).toBeGreaterThan(v0);
+    expect(v2).toBeGreaterThan(v1);
+    expect(log.version).toBe(v2);
+  });
 });

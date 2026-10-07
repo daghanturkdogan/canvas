@@ -4,9 +4,9 @@ import type { CursorMap } from './PaintCanvas';
 
 const VISIBLE_MS = 2000;
 
-interface Props { cursors: MutableRefObject<CursorMap>; players: PlayerInfo[]; you: number | null }
+interface Props { cursors: MutableRefObject<CursorMap>; players: PlayerInfo[]; you: number | null; hidden?: boolean }
 
-export function CursorLayer({ cursors, players, you }: Props) {
+export function CursorLayer({ cursors, players, you, hidden }: Props) {
   const els = useRef(new Map<number, HTMLDivElement>());
   const smooth = useRef(new Map<number, { x: number; y: number }>());
 
@@ -30,6 +30,7 @@ export function CursorLayer({ cursors, players, you }: Props) {
     return () => cancelAnimationFrame(raf);
   }, [cursors]);
 
+  if (hidden) return null;
   return (
     <div className="cursor-layer">
       {players.filter((p) => p.online && p.pid !== you).map((p) => (

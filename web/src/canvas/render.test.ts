@@ -28,3 +28,18 @@ describe('inkColor', () => {
     expect(inkColor(9, colors)).toBe('#888888');
   });
 });
+
+import { opRadius } from './render';
+
+describe('opRadius', () => {
+  it('uses the erase brush for pid 0 strokes and the paint brush otherwise', () => {
+    const r = opRadius({ brush: 6, eraseBrush: 20 });
+    expect(r({ k: 's', id: 'a', pid: 0, pts: [] })).toBe(20);
+    expect(r({ k: 's', id: 'a', pid: 3, pts: [] })).toBe(6);
+    expect(r({ k: 'f', pid: 3, poly: [] })).toBe(6);
+  });
+
+  it('falls back to the paint brush when the mode has no eraser', () => {
+    expect(opRadius({ brush: 6 })({ k: 's', id: 'a', pid: 0, pts: [] })).toBe(6);
+  });
+});

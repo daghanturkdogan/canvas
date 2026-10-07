@@ -1,8 +1,55 @@
 import type { PlayerInfo } from '@gallery/shared';
+import { groupByTeam } from './teamBoard';
 
-interface Props { players: PlayerInfo[]; shares: Record<number, number>; you: number | null }
+interface Props { players: PlayerInfo[]; shares: Record<number, number>; you: number | null; fogged?: boolean }
 
-export function Leaderboard({ players, shares, you }: Props) {
+export function Leaderboard({ players, shares, you, fogged }: Props) {
+  if (fogged) {
+    const me = players.find((p) => p.pid === you);
+    return (
+      <aside className="placard">
+        <h2>Scores</h2>
+        <p className="fog-note">Hidden in the fog until the round ends.</p>
+        {me && (
+          <ol>
+            <li className="me">
+              <span className="swatch" style={{ background: me.color }} />
+              <span className="lb-name">{me.name}</span>
+              <span className="lb-pct">{((shares[me.pid] ?? 0) * 100).toFixed(1)}%</span>
+              <span />
+            </li>
+          </ol>
+        )}
+      </aside>
+    );
+  }
+
+  const teams = groupByTeam(players, shares);
+  if (teams) {
+    return (
+      <aside className="placard">
+        <h2>Teams</h2>
+        <ol>
+          {teams.map((t) => (
+            <li key={t.team} className="team-row">
+              <span className="swatch" style={{ background: t.color }} />
+              <span className="lb-name">{t.name}</span>
+              <span className="lb-pct">{(t.share * 100).toFixed(1)}%</span>
+              <span />
+              <span className="team-members">
+                {t.members.map((m) => (
+                  <span key={m.pid} className={m.pid === you ? 'me' : ''} style={{ opacity: m.online ? 1 : 0.5 }}>
+                    <span className="swatch small" style={{ background: m.color }} />{m.name}
+                  </span>
+                ))}
+              </span>
+            </li>
+          ))}
+        </ol>
+      </aside>
+    );
+  }
+
   const rows = players
     .map((p) => ({ ...p, share: shares[p.pid] ?? 0 }))
     .filter((p) => p.online || p.share > 0)

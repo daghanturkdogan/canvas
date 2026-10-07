@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { CANVAS_H, CANVAS_W, MODE_DEFS, type Op, type RoundSummary } from '@gallery/shared';
-import { clearCanvas, drawOps, PAPER } from '../canvas/render';
+import { clearCanvas, drawOps, opRadius, PAPER } from '../canvas/render';
 
 const SHOWN = 6;
 
 function paint(canvas: HTMLCanvasElement, ops: Op[], round: RoundSummary, scale: number) {
   const ctx = canvas.getContext('2d')!;
   clearCanvas(ctx);
-  drawOps(ctx, ops, (pid) => (pid === 0 ? PAPER : round.players[pid]?.color ?? '#888888'), scale, MODE_DEFS[round.mode].brush);
+  drawOps(ctx, ops, (pid) => (pid === 0 ? PAPER : round.players[pid]?.color ?? '#888888'), scale, opRadius(MODE_DEFS[round.mode]));
 }
 
 function caption(r: RoundSummary): string {

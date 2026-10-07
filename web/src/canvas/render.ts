@@ -47,11 +47,18 @@ export function drawFill(ctx: CanvasRenderingContext2D, color: string, poly: num
   ctx.fill();
 }
 
+/** Brush radius for each op of a mode: pid 0 strokes are erasing and use the eraser brush. */
+export function opRadius(def: { brush: number; eraseBrush?: number }): (op: Op) => number {
+  return (op) => (op.k === 's' && op.pid === 0 ? def.eraseBrush ?? def.brush : def.brush);
+}
+
 export function drawOps(
-  ctx: CanvasRenderingContext2D, ops: Op[], colorOf: (pid: number) => string, scale = 1, radius = BRUSH_RADIUS,
+  ctx: CanvasRenderingContext2D, ops: Op[], colorOf: (pid: number) => string, scale = 1,
+  radius: number | ((op: Op) => number) = BRUSH_RADIUS,
 ): void {
   for (const op of ops) {
-    if (op.k === 's') drawSegment(ctx, colorOf(op.pid), op.pts, null, scale, radius);
+    const r = typeof radius === 'number' ? radius : radius(op);
+    if (op.k === 's') drawSegment(ctx, colorOf(op.pid), op.pts, null, scale, r);
     else drawFill(ctx, colorOf(op.pid), op.poly, scale);
   }
 }
