@@ -1,4 +1,4 @@
-import type { Op, RoundSummary } from '@gallery/shared';
+import type { ModeState, Op, RoundSummary } from '@gallery/shared';
 
 export interface PersistedPlayer {
   clientId: string;
@@ -14,6 +14,7 @@ export interface Meta {
   roundIdx: number;
   finalized: boolean;
   players: PersistedPlayer[];
+  modeState?: ModeState | null;
 }
 
 export interface Store {

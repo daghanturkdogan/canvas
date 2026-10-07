@@ -12,4 +12,4 @@ new_sqlite_classes = ["Room"]
 
 [vars]
 ROOM_PASSWORD = ""
-ROUND_MINUTES = "30"
+ROUND_MINUTES = "1"

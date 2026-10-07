@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { GameEngine } from './engine';
 import { MemoryStore } from '../store/memoryStore';
-import { PALETTE, type ModeId, type ServerMsg } from '@gallery/shared';
+import { MODE_DEFS, PALETTE, type ModeId, type ServerMsg } from '@gallery/shared';
+import type { ModeEntry } from './modes';
+import type { Pt } from './geometry';
 import type { Outbound } from './types';
 
 const cfg = { roundMs: 1000, overMs: 100, order: ['paint', 'enclose'] as ModeId[], password: '' };
@@ -255,5 +257,132 @@ describe('persistence', () => {
     e.tick(1000);
     expect(e.roundOps(0).length).toBe(1);
     expect(e.roundOps(12345)).toEqual([]);
+  });
+});
+
+const fakeDef = (id: string, brush = 6) => ({ ...MODE_DEFS.paint, id: id as ModeId, name: id, brush });
+const fakeCfg = (reg: Record<string, ModeEntry>, order: string[]) => ({
+  roundMs: 1000, overMs: 100, order: order as ModeId[], password: '', registry: reg,
+});
+const shareOf = (e: GameEngine) => Object.values(e.grid.shares())[0] ?? 0;
+
+describe('per-mode brush', () => {
+  it('splat paints more ground than paint war for the same stroke', () => {
+    const a = mk(0); // idx 0 = paint
+    a.join(id(1), 'Ann', undefined, 0);
+    a.onStroke(id(1), stroke('s', [100, 100, 400, 100]), 100);
+    const b = new GameEngine({ ...cfg, order: ['splat', 'paint'] as ModeId[] }, new MemoryStore(), 0);
+    b.join(id(1), 'Ann', undefined, 0);
+    b.onStroke(id(1), stroke('s', [100, 100, 400, 100]), 100);
+    expect(shareOf(b)).toBeGreaterThan(shareOf(a) * 2);
+  });
+
+  it('rebuilds the grid with the mode brush after a restart', () => {
+    const store = new MemoryStore();
+    const order = ['splat', 'paint'] as ModeId[];
+    const a = new GameEngine({ ...cfg, order }, store, 0);
+    a.join(id(1), 'Ann', undefined, 0);
+    a.onStroke(id(1), stroke('s', [100, 100, 400, 100], true), 100);
+    a.flush();
+    const b = new GameEngine({ ...cfg, order }, store, 200);
+    expect(b.grid.shares()).toEqual(a.grid.shares());
+  });
+
+  it('reports brush, how-to and the next mode in round info', () => {
+    const e = mk(0);
+    const w = of(e.join(id(1), 'Ann', undefined, 0), 'welcome')[0]!.msg;
+    expect(w.round.brush).toBe(6);
+    expect(w.round.howTo.length).toBeGreaterThan(0);
+    expect(w.round.next.mode).toBe('enclose');
+  });
+});
+
+describe('framework hooks (fake modes)', () => {
+  const base: ModeEntry = { def: fakeDef('base'), rules: { id: 'paint', name: 'base', rules: 'r', onPoints: () => [] } };
+
+  it('an erasing mode stores pid 0, clears earlier ownership, and a restart rebuilds the same grid', () => {
+    let erase = false;
+    const rules = { ...base.rules, get erases() { return erase; } };
+    const reg = { base: { def: fakeDef('base'), rules } };
+    const store = new MemoryStore();
+    const e = new GameEngine(fakeCfg(reg, ['base']), store, 0);
+    e.join(id(1), 'Ann', undefined, 0);
+    e.onStroke(id(1), stroke('a', [100, 100, 400, 100], true), 100);
+    expect(shareOf(e)).toBeGreaterThan(0);
+    erase = true;
+    e.onStroke(id(1), stroke('b', [100, 100, 400, 100], true), 200);
+    const eraseOp = e.ops[1]!;
+    expect(eraseOp.k === 's' ? eraseOp.pid : -1).toBe(0);
+    expect(e.grid.shares()).toEqual({});
+    e.flush();
+    const r = new GameEngine(fakeCfg(reg, ['base']), store, 250);
+    expect(r.grid.shares()).toEqual({});
+  });
+
+  it('a filtering mode drops points and splits the stroke without connecting the gap', () => {
+    const rules = {
+      ...base.rules,
+      filterPoints: ({ pts }: { pts: Pt[] }) => {
+        const runs: Pt[][] = [];
+        let cur: Pt[] = [];
+        for (const p of pts) {
+          if (p.x >= 300 && p.x <= 500) { if (cur.length) { runs.push(cur); cur = []; } } else cur.push(p);
+        }
+        if (cur.length) runs.push(cur);
+        return runs;
+      },
+    };
+    const reg = { base: { def: fakeDef('base'), rules } };
+    const e = new GameEngine(fakeCfg(reg, ['base']), new MemoryStore(), 0);
+    e.join(id(1), 'Ann', undefined, 0);
+    e.onStroke(id(1), stroke('s', [100, 100, 200, 100, 400, 100, 600, 100, 700, 100]), 100);
+    expect(e.ops.filter((o) => o.k === 's').length).toBe(2);
+    // the gap around x=400 must not be painted
+    const midCell = Math.floor(400 / 4) + Math.floor(100 / 4) * 400;
+    expect(e.grid.cells[midCell]).toBe(0);
+    // the previous batch ended on an allowed point, so the same stroke simply continues
+    e.onStroke(id(1), stroke('s', [700, 150, 710, 150]), 150);
+    expect(e.ops.filter((o) => o.k === 's').length).toBe(2);
+    // a batch that ends inside the blocked zone (its first point still continues the stroke)...
+    e.onStroke(id(1), stroke('s', [710, 200, 400, 200]), 200);
+    expect(e.ops.filter((o) => o.k === 's').length).toBe(2);
+    // ...breaks it, so the next batch with the same client id starts a fresh op (no line across the gap)
+    e.onStroke(id(1), stroke('s', [650, 250, 660, 250]), 250);
+    expect(e.ops.filter((o) => o.k === 's').length).toBe(3);
+  });
+
+  it('a scoring mode changes scores and picks the winner', () => {
+    const rules = {
+      ...base.rules,
+      score: ({ players }: { players: { slot: number }[] }) => ({ [players[players.length - 1]!.slot]: 1 }),
+    };
+    const reg = { base: { def: fakeDef('base'), rules } };
+    const e = new GameEngine(fakeCfg(reg, ['base']), new MemoryStore(), 0);
+    e.join(id(1), 'Ann', undefined, 0);
+    e.join(id(2), 'Bob', undefined, 0);
+    e.onStroke(id(1), stroke('s', [100, 100, 600, 100], true), 100);
+    const scores = of(e.tick(150), 'scores')[0]!.msg.shares;
+    expect(scores[e.players.get(id(2))!.slot]).toBe(1);
+    const over = of(e.tick(950), 'round')[0]!.msg;
+    expect(over.winnerPid).toBe(e.players.get(id(2))!.slot);
+  });
+
+  it('mode state is delivered to late joiners, emitted once per change, and survives a restart', () => {
+    const rules = { ...base.rules, init: () => ({ flag: [1, 2] }) };
+    const reg = { base: { def: fakeDef('base'), rules } };
+    const store = new MemoryStore();
+    const e = new GameEngine(fakeCfg(reg, ['base']), store, 0);
+    e.join(id(1), 'Ann', undefined, 0);
+    expect(of(e.tick(10), 'mode-state').length).toBe(1);
+    expect(of(e.tick(20), 'mode-state').length).toBe(0);
+    e.setModeState({ flag: [9, 9] });
+    const out = e.tick(30);
+    expect(of(out, 'mode-state').length).toBe(1);
+    expect(of(out, 'mode-state')[0]!.msg.state).toEqual({ flag: [9, 9] });
+    const late = of(e.join(id(2), 'Bob', undefined, 40), 'welcome')[0]!.msg;
+    expect(late.modeState).toEqual({ flag: [9, 9] });
+    e.flush();
+    const r = new GameEngine(fakeCfg(reg, ['base']), store, 50);
+    expect(r.modeState).toEqual({ flag: [9, 9] });
   });
 });

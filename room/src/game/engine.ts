@@ -1,11 +1,11 @@
 import {
-  BRUSH_RADIUS, CANVAS_H, CANVAS_W, GRID_H, GRID_W, HISTORY_LIMIT, MAX_FILL_SHARE, MAX_OPS_POINTS,
+  CANVAS_H, CANVAS_W, GRID_H, GRID_W, HISTORY_LIMIT, MAX_FILL_SHARE, MAX_OPS_POINTS,
   MAX_PTS_PER_MSG, MIN_FILL_CELLS, NAME_MAX, OP_CHUNK, PALETTE, modeForRound, phaseAt,
-  type Op, type PlayerInfo, type RoundInfo, type RoundSummary, type ServerMsg,
+  type ModeState, type Op, type PlayerInfo, type RoundInfo, type RoundSummary, type ServerMsg,
 } from '@gallery/shared';
 import { decimate, type Pt } from './geometry';
 import { LoopTrail } from './loops';
-import { MODES } from './modes';
+import { REGISTRY, type ModeEntry } from './modes';
 import { OwnershipGrid } from './ownership';
 import type { EngineConfig, Outbound, PlayerState } from './types';
 import type { PersistedPlayer, Store } from '../store/store';
@@ -28,12 +28,15 @@ export class GameEngine {
   roundIdx = -1;
   finalized = false;
   winnerPid: number | null = null;
+  modeState: ModeState | null = null;
 
   private opPoints = 0;
   private strokeIdx = new Map<string, number>();
   private dirtyFrom = Infinity;
   private metaDirty = false;
   private scoresDirty = true;
+  private modeStateDirty = false;
+  private idCounter = 0;
 
   constructor(readonly cfg: EngineConfig, private store: Store, now: number) {
     this.restore();
@@ -75,6 +78,7 @@ export class GameEngine {
     p.online = false;
     p.lastSeen = now;
     p.curStroke = null;
+    p.curOpId = null;
     this.metaDirty = true;
     return [{ to: 'all', msg: { t: 'players', players: this.playerInfos() } }];
   }
@@ -101,14 +105,49 @@ export class GameEngine {
       pts.push({ x: clamp(Math.round(x), 0, CANVAS_W), y: clamp(Math.round(y), 0, CANVAS_H) });
     }
 
-    const key = `${p.slot}:${m.id}`;
-    const newStroke = p.curStroke !== m.id || !this.strokeIdx.has(key);
+    if (p.lastMsgAt && now - p.lastMsgAt < 500 && p.curStroke === m.id) p.stats.drawMs += now - p.lastMsgAt;
+    p.lastMsgAt = now;
+
+    const entry = this.entry(this.roundIdx);
+    const runs = entry.rules.filterPoints
+      ? entry.rules.filterPoints({ player: p, pts, now, roundIdx: this.roundIdx }).filter((r) => r.length > 0)
+      : [pts];
+    if (runs.length === 0) {
+      p.curStroke = null;
+      p.curOpId = null;
+      return out;
+    }
+
+    let continuing = p.curStroke === m.id && p.curOpId != null && this.strokeIdx.has(`${p.slot}:${p.curOpId}`);
+    let opId = continuing ? p.curOpId! : m.id;
+    for (const run of runs) {
+      if (!continuing) opId = this.freshId(p.slot, m.id);
+      this.applyRun(p, opId, run, !continuing, entry, out, clientId);
+      continuing = false; // any later run in this batch comes after a gap
+    }
+
+    const lastRun = runs[runs.length - 1]!;
+    const tailKept = lastRun[lastRun.length - 1] === pts[pts.length - 1];
+    if (m.end === true || !tailKept) {
+      p.curStroke = null;
+      p.curOpId = null;
+    } else {
+      p.curStroke = m.id;
+      p.curOpId = opId;
+    }
+    return out;
+  }
+
+  private applyRun(
+    p: PlayerState, opId: string, pts: Pt[], newStroke: boolean, entry: ModeEntry, out: Outbound[], clientId: string,
+  ): void {
+    const owner = entry.rules.erases ? 0 : p.slot;
+    const key = `${p.slot}:${opId}`;
     let opIndex: number;
     let prev: Pt | null = null;
     if (newStroke) {
-      opIndex = this.pushOp({ k: 's', id: m.id, pid: p.slot, pts: [] });
+      opIndex = this.pushOp({ k: 's', id: opId, pid: owner, pts: [] });
       this.strokeIdx.set(key, opIndex);
-      p.curStroke = m.id;
     } else {
       opIndex = this.strokeIdx.get(key)!;
       const existing = this.ops[opIndex] as Extract<Op, { k: 's' }>;
@@ -123,22 +162,17 @@ export class GameEngine {
 
     const path = prev ? [prev, ...pts] : pts;
     for (let i = 1; i < path.length; i++) p.stats.ink += Math.hypot(path[i]!.x - path[i - 1]!.x, path[i]!.y - path[i - 1]!.y);
-    if (p.lastMsgAt && now - p.lastMsgAt < 500 && !newStroke) p.stats.drawMs += now - p.lastMsgAt;
-    p.lastMsgAt = now;
-    p.stats.overdraw += this.grid.stampPath(p.slot, path, BRUSH_RADIUS);
+    p.stats.overdraw += this.grid.stampPath(owner, path, entry.def.brush);
     this.scoresDirty = true;
     this.metaDirty = true;
 
-    out.push({ to: { except: clientId }, msg: { t: 'stroke', id: m.id, pid: p.slot, pts: flat } });
+    out.push({ to: { except: clientId }, msg: { t: 'stroke', id: opId, pid: owner, pts: flat } });
 
-    const mode = MODES[modeForRound(this.roundIdx, this.cfg.order)];
-    for (const poly of mode.onPoints({ player: p, pts, newStroke })) this.applyFill(p, poly, out);
-
-    if (m.end === true) p.curStroke = null;
-    return out;
+    for (const poly of entry.rules.onPoints({ player: p, pts, newStroke })) this.applyFill(p, poly, out);
   }
 
   private applyFill(p: PlayerState, poly: Pt[], out: Outbound[]): void {
+    if (this.entry(this.roundIdx).rules.erases) return;
     const rounded = decimate(poly, 200).map((q) => ({ x: Math.round(q.x), y: Math.round(q.y) }));
     const cells = this.grid.polygonCells(rounded);
     if (cells.length < MIN_FILL_CELLS || cells.length > MAX_FILL_SHARE * GRID_W * GRID_H) return;
@@ -148,13 +182,25 @@ export class GameEngine {
     out.push({ to: 'all', msg: { t: 'fill', pid: p.slot, poly: flat } });
   }
 
+  // ---- mode state ---------------------------------------------------------------
+
+  setModeState(next: ModeState | null): void {
+    this.modeState = next;
+    this.modeStateDirty = true;
+    this.metaDirty = true;
+  }
+
   // ---- clock -------------------------------------------------------------------
 
   tick(now: number): Outbound[] {
     const out = this.advance(now);
     if (this.scoresDirty) {
       this.scoresDirty = false;
-      out.push({ to: 'all', msg: { t: 'scores', shares: this.grid.shares() } });
+      out.push({ to: 'all', msg: { t: 'scores', shares: this.scores() } });
+    }
+    if (this.modeStateDirty) {
+      this.modeStateDirty = false;
+      out.push({ to: 'all', msg: { t: 'mode-state', idx: this.roundIdx, state: this.modeState } });
     }
     return out;
   }
@@ -184,12 +230,30 @@ export class GameEngine {
         roundIdx: this.roundIdx,
         finalized: this.finalized,
         players: [...this.players.values()].map(persist),
+        modeState: this.modeState,
       });
       this.metaDirty = false;
     }
   }
 
   // ---- internals -----------------------------------------------------------------
+
+  private entry(idx: number): ModeEntry {
+    const reg = this.cfg.registry ?? REGISTRY;
+    return reg[modeForRound(idx, this.cfg.order)]!;
+  }
+
+  private scores(): Record<number, number> {
+    const { rules } = this.entry(this.roundIdx);
+    return rules.score ? rules.score({ grid: this.grid, players: [...this.players.values()] }) : this.grid.shares();
+  }
+
+  private freshId(slot: number, id: string): string {
+    if (!this.strokeIdx.has(`${slot}:${id}`)) return id;
+    let candidate: string;
+    do { candidate = `${id}~${++this.idCounter}`; } while (this.strokeIdx.has(`${slot}:${candidate}`));
+    return candidate;
+  }
 
   private advance(now: number): Outbound[] {
     const w = phaseAt(now, this.cfg.roundMs, this.cfg.overMs);
@@ -223,9 +287,13 @@ export class GameEngine {
     this.finalized = false;
     this.winnerPid = null;
     this.scoresDirty = true;
+    const init = this.entry(idx).rules.init;
+    this.modeState = init ? init({ roundIdx: idx }) : null;
+    this.modeStateDirty = this.modeState !== null;
     for (const p of this.players.values()) {
       p.trail.reset();
       p.curStroke = null;
+      p.curOpId = null;
     }
     this.store.pruneBefore(idx - HISTORY_LIMIT);
     this.metaDirty = true;
@@ -235,7 +303,7 @@ export class GameEngine {
   private finalize(): void {
     this.finalized = true;
     this.flush();
-    const shares = this.grid.shares();
+    const shares = this.scores();
     let winner: number | null = null;
     let best = 0;
     for (const [slot, share] of Object.entries(shares)) {
@@ -274,16 +342,20 @@ export class GameEngine {
     this.history = this.store.loadHistory(HISTORY_LIMIT);
     if (!meta) return;
     for (const pp of meta.players) {
-      this.players.set(pp.clientId, { ...pp, online: false, trail: new LoopTrail(), curStroke: null, lastMsgAt: 0, tokens: BUCKET_CAP, tokensAt: 0 });
+      this.players.set(pp.clientId, { ...pp, online: false, trail: new LoopTrail(), curStroke: null, curOpId: null, lastMsgAt: 0, tokens: BUCKET_CAP, tokensAt: 0 });
     }
     this.roundIdx = meta.roundIdx;
     this.finalized = meta.finalized;
+    const entry = this.entry(meta.roundIdx);
+    this.modeState = meta.modeState !== undefined
+      ? meta.modeState
+      : (entry.rules.init?.({ roundIdx: meta.roundIdx }) ?? null);
     this.ops = this.store.loadOpChunks(meta.roundIdx);
     for (const op of this.ops) {
       if (op.k === 's') {
         const pts: Pt[] = [];
         for (let i = 0; i < op.pts.length; i += 2) pts.push({ x: op.pts[i]!, y: op.pts[i + 1]! });
-        this.grid.stampPath(op.pid, pts, BRUSH_RADIUS);
+        this.grid.stampPath(op.pid, pts, entry.def.brush);
         this.opPoints += pts.length;
       } else {
         const poly: Pt[] = [];
@@ -293,7 +365,7 @@ export class GameEngine {
       }
     }
     if (this.finalized) {
-      const shares = this.grid.shares();
+      const shares = this.scores();
       let best = 0;
       for (const [slot, share] of Object.entries(shares)) if (share > best) { best = share; this.winnerPid = Number(slot); }
     }
@@ -312,7 +384,7 @@ export class GameEngine {
   private newPlayer(clientId: string, slot: number, name: string, now: number): PlayerState {
     return {
       clientId, slot, name, color: PALETTE[slot - 1]!, online: true, lastSeen: now, wins: 0,
-      stats: { ink: 0, drawMs: 0, overdraw: 0 }, trail: new LoopTrail(), curStroke: null,
+      stats: { ink: 0, drawMs: 0, overdraw: 0 }, trail: new LoopTrail(), curStroke: null, curOpId: null,
       lastMsgAt: 0, tokens: BUCKET_CAP, tokensAt: now,
     };
   }
@@ -327,8 +399,13 @@ export class GameEngine {
 
   private roundInfo(now: number): RoundInfo {
     const w = phaseAt(now, this.cfg.roundMs, this.cfg.overMs);
-    const mode = MODES[modeForRound(w.idx, this.cfg.order)];
-    return { idx: w.idx, mode: mode.id, modeName: mode.name, rules: mode.rules, phase: w.phase, startsAt: w.startsAt, overAt: w.overAt, endsAt: w.endsAt };
+    const e = this.entry(w.idx);
+    const nx = this.entry(w.idx + 1).def;
+    return {
+      idx: w.idx, mode: e.def.id, modeName: e.def.name, rules: e.def.rules, howTo: e.def.howTo, brush: e.def.brush,
+      phase: w.phase, startsAt: w.startsAt, overAt: w.overAt, endsAt: w.endsAt,
+      next: { mode: nx.id, name: nx.name, rules: nx.rules, howTo: nx.howTo, brush: nx.brush },
+    };
   }
 
   private playerInfos(): PlayerInfo[] {
@@ -346,8 +423,9 @@ export class GameEngine {
       round: this.roundInfo(now),
       winnerPid: this.winnerPid,
       ops: this.ops,
-      shares: this.grid.shares(),
+      shares: this.scores(),
       history: this.history,
+      modeState: this.modeState,
     };
   }
 }

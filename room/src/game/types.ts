@@ -1,5 +1,6 @@
 import type { ModeId, ServerMsg } from '@gallery/shared';
 import type { LoopTrail } from './loops';
+import type { ModeEntry } from './modes';
 
 export interface PlayerStats { ink: number; drawMs: number; overdraw: number }
 
@@ -14,6 +15,7 @@ export interface PlayerState {
   stats: PlayerStats;
   trail: LoopTrail;
   curStroke: string | null;
+  curOpId?: string | null;
   lastMsgAt: number;
   tokens: number;
   tokensAt: number;
@@ -27,4 +29,6 @@ export interface EngineConfig {
   overMs: number;
   order: readonly ModeId[];
   password: string;
+  /** Test hook: replaces the built-in mode registry. */
+  registry?: Record<string, ModeEntry>;
 }
