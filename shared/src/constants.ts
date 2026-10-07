@@ -5,7 +5,7 @@ export const GRID_W = CANVAS_W / CELL;
 export const GRID_H = CANVAS_H / CELL;
 export const BRUSH_RADIUS = 6;
 
-export const ROUND_MS = 30 * 60 * 1000;
+export const ROUND_MS = 60 * 1000;
 export const OVER_MS = 10_000;
 
 export const MAX_FILL_SHARE = 0.5;
@@ -16,7 +16,7 @@ export const NAME_MAX = 20;
 export const HISTORY_LIMIT = 50;
 export const OP_CHUNK = 100;
 
-export const MODE_ORDER = ['paint', 'enclose'] as const;
+export const MODE_ORDER = ['paint', 'splat', 'enclose'] as const;
 
 /** Slot n (1-based) uses PALETTE[n - 1]. */
 export const PALETTE: readonly string[] = [

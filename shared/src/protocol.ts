@@ -1,4 +1,5 @@
-export type ModeId = 'paint' | 'enclose';
+export type ModeId = 'paint' | 'splat' | 'enclose';
+export type ModeState = Record<string, unknown>;
 
 export interface StrokeOp { k: 's'; id: string; pid: number; pts: number[] }
 export interface FillOp { k: 'f'; pid: number; poly: number[] }
@@ -6,15 +7,20 @@ export type Op = StrokeOp | FillOp;
 
 export interface PlayerInfo { pid: number; name: string; color: string; online: boolean; wins: number }
 
+export interface NextModeInfo { mode: ModeId; name: string; rules: string; howTo: string[]; brush: number }
+
 export interface RoundInfo {
   idx: number;
   mode: ModeId;
   modeName: string;
   rules: string;
+  howTo: string[];
+  brush: number;
   phase: 'playing' | 'over';
   startsAt: number;
   overAt: number;
   endsAt: number;
+  next: NextModeInfo;
 }
 
 export interface RoundSummary {
@@ -42,6 +48,7 @@ export type ServerMsg =
       ops: Op[];
       shares: Record<number, number>;
       history: RoundSummary[];
+      modeState: ModeState | null;
     }
   | { t: 'error'; reason: 'bad-password' | 'room-full' | 'bad-join' }
   | { t: 'stroke'; id: string; pid: number; pts: number[] }
@@ -49,4 +56,5 @@ export type ServerMsg =
   | { t: 'players'; players: PlayerInfo[] }
   | { t: 'scores'; shares: Record<number, number> }
   | { t: 'round'; round: RoundInfo; winnerPid: number | null; wipe: boolean; history: RoundSummary[] }
+  | { t: 'mode-state'; idx: number; state: ModeState | null }
   | { t: 'round-ops'; idx: number; ops: Op[] };
