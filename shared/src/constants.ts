@@ -5,7 +5,7 @@ export const GRID_W = CANVAS_W / CELL;
 export const GRID_H = CANVAS_H / CELL;
 export const BRUSH_RADIUS = 6;
 
-export const ROUND_MS = 2 * 60 * 1000;
+export const ROUND_MS = 60 * 1000;
 export const OVER_MS = 10_000;
 
 export const MAX_FILL_SHARE = 0.5;
