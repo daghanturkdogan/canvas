@@ -3,6 +3,7 @@ import type { ClientMsg, Op, ServerMsg } from '@gallery/shared';
 import type { RoomState } from '../state/roomReducer';
 import { PaintCanvas, type CursorMap } from '../canvas/PaintCanvas';
 import { CursorLayer } from '../canvas/CursorLayer';
+import type { OpLog } from '../canvas/opLog';
 import { useNow } from '../useNow';
 import { Plaque } from './Plaque';
 import { Leaderboard } from './Leaderboard';
@@ -14,11 +15,12 @@ interface Props {
   send: (m: ClientMsg) => void;
   subscribe: (fn: (m: ServerMsg) => void) => () => void;
   getRoundOps: (idx: number) => Promise<Op[]>;
+  opLog: OpLog;
   onLeave: () => void;
   children?: ReactNode;
 }
 
-export function Gallery({ state, send, subscribe, getRoundOps, onLeave }: Props) {
+export function Gallery({ state, send, subscribe, getRoundOps, opLog, onLeave }: Props) {
   const cursors = useRef<CursorMap>(new Map());
   const now = useNow(state.clockOffset);
   const round = state.round;
@@ -39,7 +41,7 @@ export function Gallery({ state, send, subscribe, getRoundOps, onLeave }: Props)
             <div className="mat">
               <div className="canvas-wrap">
                 <PaintCanvas
-                  send={send} subscribe={subscribe} players={state.players} you={state.you} enabled={playing} cursors={cursors}
+                  send={send} subscribe={subscribe} opLog={opLog} players={state.players} you={state.you} enabled={playing} cursors={cursors}
                 />
                 <CursorLayer cursors={cursors} players={state.players} you={state.you} />
                 {round?.phase === 'over' && (

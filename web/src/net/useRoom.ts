@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 import type { ClientMsg, Op, ServerMsg } from '@gallery/shared';
 import { initialState, reduce, type RoomState } from '../state/roomReducer';
+import { OpLog } from '../canvas/opLog';
 
 interface Opts { url: string; clientId: string; name: string | null; password?: string }
 
@@ -10,6 +11,7 @@ export function useRoom({ url, clientId, name, password }: Opts) {
   const listeners = useRef(new Set<(m: ServerMsg) => void>());
   const pending = useRef(new Map<number, (ops: Op[]) => void>());
   const cache = useRef(new Map<number, Op[]>());
+  const opLog = useRef(new OpLog());
 
   const send = useCallback((msg: ClientMsg) => {
     const ws = wsRef.current;
@@ -53,6 +55,7 @@ export function useRoom({ url, clientId, name, password }: Opts) {
           pending.current.get(msg.idx)?.(msg.ops);
           pending.current.delete(msg.idx);
         }
+        opLog.current.apply(msg);
         dispatch({ type: 'server', msg, localNow: Date.now() });
         listeners.current.forEach((fn) => fn(msg));
       };
@@ -70,5 +73,5 @@ export function useRoom({ url, clientId, name, password }: Opts) {
     };
   }, [url, clientId, name, password]);
 
-  return { state: state as RoomState, send, subscribe, getRoundOps };
+  return { state: state as RoomState, send, subscribe, getRoundOps, opLog: opLog.current };
 }
