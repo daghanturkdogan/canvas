@@ -1,5 +1,5 @@
 import {
-  CELL, GRID_H, GRID_W, MODE_DEFS, flagAt, hillAt, hotZones, inCircle, ringAt,
+  CELL, GRID_H, GRID_W, MODE_DEFS, flagAt, hillAt, hotZones, inCircle, mulberry32, ringAt, teamCountFor, teamShade,
   type ModeDef, type ModeId, type ModeState, type PlayerInfo,
 } from '@gallery/shared';
 import { pointInPolygon, type Pt } from './geometry';
@@ -172,6 +172,68 @@ const ctf: Mode = {
   },
 };
 
+// ---- Eraser Wars: paint, or erase with a wide brush ------------------------------------------
+
+const eraser: Mode = { ...plain('eraser'), allowsErase: true };
+
+// ---- Team Tug-of-War: players are dealt into teams, scored as a team --------------------------
+
+interface TeamState { teams: Record<string, number>; count: number }
+
+const teamState = (state: ModeState | null | undefined): TeamState => ({
+  teams: { ...((state?.teams as Record<string, number> | undefined) ?? {}) },
+  count: Number(state?.count ?? 2),
+});
+
+const teamSizes = (st: TeamState): number[] => {
+  const sizes = Array.from({ length: st.count }, () => 0);
+  for (const t of Object.values(st.teams)) if (t < sizes.length) sizes[t]!++;
+  return sizes;
+};
+
+const teams: Mode = {
+  ...plain('teams'),
+  init({ roundIdx, players }) {
+    const count = teamCountFor(players.length);
+    const order = players.map((p) => p.slot).sort((a, b) => a - b);
+    const rng = mulberry32(Math.imul(roundIdx + 1, 2246822519) >>> 0);
+    for (let i = order.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1));
+      [order[i], order[j]] = [order[j]!, order[i]!];
+    }
+    const assigned: Record<string, number> = {};
+    order.forEach((slot, i) => { assigned[String(slot)] = i % count; });
+    return { teams: assigned, count };
+  },
+  onJoin({ player, players, api }) {
+    const st = teamState(api.state);
+    if (st.teams[String(player.slot)] !== undefined) return;
+    const online = players.filter((p) => p.online).length;
+    st.count = Math.max(st.count, teamCountFor(online));
+    const sizes = teamSizes(st);
+    const smallest = sizes.indexOf(Math.min(...sizes));
+    st.teams[String(player.slot)] = smallest;
+    api.setState({ teams: st.teams, count: st.count });
+  },
+  playerInfo(info, { state }) {
+    const st = teamState(state);
+    const team = st.teams[String(info.pid)];
+    if (team === undefined) return info;
+    const mates = Object.entries(st.teams).filter(([, t]) => t === team).map(([slot]) => Number(slot)).sort((a, b) => a - b);
+    return { ...info, team, color: teamShade(team, mates.indexOf(info.pid)) };
+  },
+  score({ grid, state }) {
+    const st = teamState(state);
+    const shares = grid.shares();
+    const totals: Record<number, number> = {};
+    for (const [slot, team] of Object.entries(st.teams)) totals[team] = (totals[team] ?? 0) + (shares[Number(slot)] ?? 0);
+    const out: Record<number, number> = {};
+    for (const [slot, team] of Object.entries(st.teams)) out[Number(slot)] = totals[team] ?? 0;
+    for (const [owner, share] of Object.entries(shares)) if (out[Number(owner)] === undefined) out[Number(owner)] = share;
+    return out;
+  },
+};
+
 export const MODES: Record<ModeId, Mode> = {
   paint,
   splat,
@@ -180,9 +242,9 @@ export const MODES: Record<ModeId, Mode> = {
   enclose,
   ctf,
   fog: plain('fog'),
-  eraser: plain('eraser'),
+  eraser,
   shrink,
-  teams: plain('teams'),
+  teams,
 };
 
 export interface ModeEntry { def: ModeDef; rules: Mode }

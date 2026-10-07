@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { GameEngine } from './engine';
 import { MemoryStore } from '../store/memoryStore';
-import { flagAt, hillAt, hotZones, inCircle, type ModeId, type ServerMsg } from '@gallery/shared';
+import { TEAMS, flagAt, hillAt, hotZones, inCircle, type ModeId, type ServerMsg } from '@gallery/shared';
 import type { Outbound } from './types';
 
 const ROUND = 100_000;
@@ -158,5 +158,120 @@ describe('Capture the Flag', () => {
     const share = e.grid.shares()[slot]!;
     const score = of(e.tick(now0 + 200), 'scores')[0]!.msg.shares[slot]!;
     expect(score).toBeCloseTo(share + 0.08, 5);
+  });
+});
+
+describe('Eraser Wars', () => {
+  it('erases ownership with the wide brush when the stroke asks for it', () => {
+    const e = make('eraser', 1000);
+    e.join(id(1), 'Ann', undefined, 1000);
+    e.join(id(2), 'Bob', undefined, 1000);
+    e.onStroke(id(1), stroke('p', line(100, 200, 700, 200, 20)), 1100);
+    const slot1 = e.players.get(id(1))!.slot;
+    expect(e.grid.shares()[slot1]).toBeGreaterThan(0);
+    e.onStroke(id(2), { t: 'stroke', id: 'x', pts: line(100, 200, 700, 200, 20), end: true, erase: true }, 1200);
+    const eraseOp = e.ops[1]!;
+    expect(eraseOp.k === 's' ? eraseOp.pid : -1).toBe(0);
+    expect(e.grid.shares()[slot1] ?? 0).toBe(0); // the wide eraser (20) covers the thin line (6) completely
+  });
+
+  it('ignores the erase flag in modes that do not allow erasing', () => {
+    const e = make('paint', 1000);
+    e.join(id(1), 'Ann', undefined, 1000);
+    e.onStroke(id(1), { t: 'stroke', id: 'x', pts: line(100, 200, 700, 200, 20), end: true, erase: true }, 1100);
+    const op = e.ops[0]!;
+    expect(op.k === 's' ? op.pid : -1).toBe(e.players.get(id(1))!.slot);
+  });
+});
+
+describe('Team Tug-of-War', () => {
+  /** An engine in a quiet round with `n` players online, advanced into a fresh teams round. */
+  const startWith = (n: number) => {
+    const e = make('teams', 1000);
+    for (let i = 1; i <= n; i++) e.join(id(i), `P${i}`, undefined, 1000);
+    e.tick(ROUND + 1000); // new round: teams are dealt for everyone online
+    return e;
+  };
+  const teamOf = (e: GameEngine, n: number) => (e.modeState!.teams as Record<string, number>)[String(e.players.get(id(n))!.slot)]!;
+  const sizes = (e: GameEngine) => {
+    const counts: Record<number, number> = {};
+    for (const t of Object.values(e.modeState!.teams as Record<string, number>)) counts[t] = (counts[t] ?? 0) + 1;
+    return Object.values(counts).sort();
+  };
+
+  it('uses 2 teams for a small room and splits it evenly', () => {
+    const e = startWith(8);
+    expect(e.modeState!.count).toBe(2);
+    expect(sizes(e)).toEqual([4, 4]);
+  });
+
+  it('uses more teams when more people are playing', () => {
+    const e = startWith(12);
+    expect(e.modeState!.count).toBe(4);
+    expect(sizes(e)).toEqual([3, 3, 3, 3]);
+  });
+
+  it('puts a late joiner in the smallest team, and may open a new team as the room grows', () => {
+    const e = startWith(8);
+    e.join(id(9), 'P9', undefined, ROUND + 2000);
+    expect(e.modeState!.count).toBe(3); // 9 players -> 3 teams
+    expect(sizes(e)).toEqual([1, 4, 4]);
+    e.join(id(10), 'P10', undefined, ROUND + 2100);
+    expect(sizes(e)).toEqual([2, 4, 4]);
+  });
+
+  it('shows team colors from the team families, and tells clients their team', () => {
+    const e = startWith(8);
+    const w = of(e.join(id(1), 'P1', undefined, ROUND + 3000), 'welcome')[0]!.msg;
+    for (const p of w.players.filter((q) => q.team !== undefined)) {
+      expect(TEAMS[p.team!]!.shades).toContain(p.color);
+    }
+    const colors = new Set(w.players.map((p) => p.color));
+    expect(colors.size).toBe(w.players.length); // still all different within the room
+  });
+
+  it('re-sends the player list when the round starts so clients recolor', () => {
+    const e = make('teams', 1000);
+    for (let i = 1; i <= 6; i++) e.join(id(i), `P${i}`, undefined, 1000);
+    const out = e.tick(ROUND + 1000);
+    const players = of(out, 'players').at(-1)!.msg.players;
+    expect(players.every((p) => p.team !== undefined)).toBe(true);
+  });
+
+  it('scores a team as the sum of its members, and the winning team beats a bigger single painter', () => {
+    const e = startWith(6);
+    const t0 = teamOf(e, 1);
+    const mates = [1, 2, 3, 4, 5, 6].filter((n) => teamOf(e, n) === t0);
+    const rival = [1, 2, 3, 4, 5, 6].find((n) => teamOf(e, n) !== t0)!;
+    const now = ROUND + 5000;
+    // two teammates paint a 300 px line each; the rival paints one 400 px line (more than either teammate alone)
+    e.onStroke(id(mates[0]!), stroke('a', line(100, 100, 400, 100, 8)), now);
+    e.onStroke(id(mates[1]!), stroke('b', line(100, 200, 400, 200, 8)), now);
+    e.onStroke(id(rival), stroke('c', line(100, 300, 500, 300, 8)), now);
+    const scores = of(e.tick(now + 100), 'scores')[0]!.msg.shares;
+    const slot = (n: number) => e.players.get(id(n))!.slot;
+    expect(scores[slot(mates[0]!)]).toBeCloseTo(scores[slot(mates[1]!)]!, 8); // teammates share one score
+    expect(scores[slot(mates[0]!)]!).toBeGreaterThan(scores[slot(rival)]!); // the team total beats the bigger single painter
+    const over = of(e.tick(ROUND * 2 - 5000), 'round')[0]!.msg;
+    expect(mates.map(slot)).toContain(over.winnerPid);
+  });
+
+  it('records team shades in the finished round so past rounds replay in team colors', () => {
+    const e = startWith(6);
+    e.onStroke(id(1), stroke('a', line(100, 100, 400, 100, 8)), ROUND + 5000);
+    e.tick(ROUND * 2 - 5000);
+    const summary = e.history.at(-1)!;
+    const color = summary.players[e.players.get(id(1))!.slot]!.color;
+    expect(TEAMS.flatMap((t) => t.shades)).toContain(color);
+  });
+
+  it('keeps the teams across a server restart', () => {
+    const store = new MemoryStore();
+    const e = make('teams', 1000, store);
+    for (let i = 1; i <= 6; i++) e.join(id(i), `P${i}`, undefined, 1000);
+    e.tick(ROUND + 1000);
+    e.flush();
+    const r = make('teams', ROUND + 1500, store);
+    expect(r.modeState).toEqual(e.modeState);
   });
 });
