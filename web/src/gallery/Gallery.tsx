@@ -1,8 +1,9 @@
 import { useRef, type ReactNode } from 'react';
-import type { ClientMsg, Op, ServerMsg } from '@gallery/shared';
+import { MODE_DEFS, overlayShapes, type ClientMsg, type Op, type ServerMsg } from '@gallery/shared';
 import type { RoomState } from '../state/roomReducer';
 import { PaintCanvas, type CursorMap } from '../canvas/PaintCanvas';
 import { CursorLayer } from '../canvas/CursorLayer';
+import { OverlayLayer } from '../canvas/OverlayLayer';
 import type { OpLog } from '../canvas/opLog';
 import { useNow } from '../useNow';
 import { Plaque } from './Plaque';
@@ -44,6 +45,7 @@ export function Gallery({ state, send, subscribe, getRoundOps, opLog, onLeave }:
                   send={send} subscribe={subscribe} opLog={opLog} players={state.players} you={state.you} enabled={playing} brush={round?.brush ?? 6} cursors={cursors}
                 />
                 <CursorLayer cursors={cursors} players={state.players} you={state.you} />
+                {round && <OverlayLayer shapes={overlayShapes(MODE_DEFS[round.mode], round, now, state.modeState)} />}
                 {round?.phase === 'over' && (
                   <RoundOver round={round} winner={winner} share={state.shares[state.winnerPid ?? -1] ?? 0} now={now} />
                 )}
