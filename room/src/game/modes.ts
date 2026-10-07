@@ -39,6 +39,8 @@ export interface Mode {
   filterPoints?(ctx: { player: PlayerState; pts: Pt[]; now: number; roundIdx: number; round: RoundRef; api: ModeApi }): Pt[][];
   /** Called with newly received points; returns polygons that should be filled with the player's color. */
   onPoints(ctx: ModeCtx): Pt[][];
+  /** Called about once a second while drawing is open (time-based points). */
+  onTick?(ctx: { now: number; round: RoundRef; grid: OwnershipGrid; players: PlayerState[]; api: ModeApi }): void;
   /** A fill polygon was applied for `player`. */
   onFill?(ctx: { player: PlayerState; poly: Pt[]; now: number; round: RoundRef; api: ModeApi }): void;
   /** Score per player slot (fraction-like). Defaults to territory share. */
@@ -68,47 +70,83 @@ const splat = plain('splat');
 
 const enclose: Mode = { ...plain('enclose'), onPoints: encloseOnPoints };
 
-// ---- Hot Zones: ground inside the three zones counts 5x ---------------------------------------
+// ---- point-scoring helpers -----------------------------------------------------------------
 
-let zoneMaskFor = -1;
-let zoneMask: Uint8Array | null = null;
-function hotZoneMask(roundIdx: number): Uint8Array {
-  if (zoneMask && zoneMaskFor === roundIdx) return zoneMask;
-  const zones = hotZones(roundIdx);
-  const mask = new Uint8Array(GRID_W * GRID_H);
-  for (let gy = 0; gy < GRID_H; gy++) {
-    for (let gx = 0; gx < GRID_W; gx++) {
-      const c = { x: gx * CELL + CELL / 2, y: gy * CELL + CELL / 2 };
-      if (zones.some((z) => inCircle(c, z))) mask[gy * GRID_W + gx] = 1;
-    }
-  }
-  zoneMask = mask;
-  zoneMaskFor = roundIdx;
-  return mask;
+const countMap = (v: unknown): Record<string, number> => ({ ...((v as Record<string, number> | undefined) ?? {}) });
+
+/** A `{ slot: number }` map stored in the mode state, as numeric keys. */
+function pointsFrom(state: ModeState | null, key = 'pts'): Record<number, number> {
+  const out: Record<number, number> = {};
+  for (const [slot, n] of Object.entries(countMap(state?.[key]))) out[Number(slot)] = n;
+  return out;
 }
+
+function addPoints(api: ModeApi, slot: number, n: number): void {
+  if (!(n > 0)) return;
+  const pts = countMap(api.state?.pts);
+  pts[String(slot)] = (pts[String(slot)] ?? 0) + n;
+  api.setState({ ...(api.state ?? {}), pts });
+}
+
+const inkLength = (pts: Pt[]): number => {
+  let len = 0;
+  for (let i = 1; i < pts.length; i++) len += Math.hypot(pts[i]!.x - pts[i - 1]!.x, pts[i]!.y - pts[i - 1]!.y);
+  return len;
+};
+
+/** Length of the line segments whose midpoint lies inside the circle. */
+const inkInside = (pts: Pt[], c: { x: number; y: number; r: number }): number => {
+  let len = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1]!, b = pts[i]!;
+    if (inCircle({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, c)) len += Math.hypot(b.x - a.x, b.y - a.y);
+  }
+  return len;
+};
+
+const INK_PER_POINT = 10;
+
+// ---- Hot Zones: hold a zone to earn 5 points every second ------------------------------------
+
+const ZONE_POINTS = 5;
+const ZONE_MIN_CELLS = 15;
 
 const hotzones: Mode = {
   ...plain('hotzones'),
-  score({ grid, roundIdx }) {
-    const mask = hotZoneMask(roundIdx);
-    const weights = new Map<number, number>();
-    let total = 0;
-    for (let i = 0; i < grid.cells.length; i++) {
-      const w = mask[i] ? 5 : 1;
-      total += w;
-      const owner = grid.cells[i]!;
-      if (owner) weights.set(owner, (weights.get(owner) ?? 0) + w);
+  init: () => ({ pts: {} }),
+  onTick({ round, grid, api }) {
+    const pts = countMap(api.state?.pts);
+    let changed = false;
+    for (const z of hotZones(round.idx)) {
+      const counts = new Map<number, number>();
+      const gx0 = Math.max(0, Math.floor((z.x - z.r) / CELL)), gx1 = Math.min(GRID_W - 1, Math.floor((z.x + z.r) / CELL));
+      const gy0 = Math.max(0, Math.floor((z.y - z.r) / CELL)), gy1 = Math.min(GRID_H - 1, Math.floor((z.y + z.r) / CELL));
+      for (let gy = gy0; gy <= gy1; gy++) {
+        for (let gx = gx0; gx <= gx1; gx++) {
+          if (!inCircle({ x: gx * CELL + CELL / 2, y: gy * CELL + CELL / 2 }, z)) continue;
+          const owner = grid.cells[gy * GRID_W + gx]!;
+          if (owner) counts.set(owner, (counts.get(owner) ?? 0) + 1);
+        }
+      }
+      let best = 0, who = 0, tied = false;
+      for (const [owner, n] of counts) {
+        if (n > best) { best = n; who = owner; tied = false; } else if (n === best) tied = true;
+      }
+      if (who && !tied && best >= ZONE_MIN_CELLS) {
+        pts[String(who)] = (pts[String(who)] ?? 0) + ZONE_POINTS;
+        changed = true;
+      }
     }
-    const out: Record<number, number> = {};
-    for (const [owner, w] of weights) out[owner] = w / total;
-    return out;
+    if (changed) api.setState({ ...(api.state ?? {}), pts });
   },
+  score: ({ state }) => pointsFrom(state),
 };
 
-// ---- Shrinking Zone: only the area inside the shrinking ring can be painted ------------------
+// ---- Shrinking Zone: only the ring can be painted, and ink is worth more as it tightens -------
 
 const shrink: Mode = {
   ...plain('shrink'),
+  init: () => ({ pts: {} }),
   filterPoints({ pts, now, round }) {
     const ring = ringAt(round, now);
     const runs: Pt[][] = [];
@@ -120,54 +158,52 @@ const shrink: Mode = {
     if (cur.length) runs.push(cur);
     return runs;
   },
+  onPoints({ player, pts, now, round, api }) {
+    const t = Math.min(1, Math.max(0, (now - round.startsAt) / (round.overAt - round.startsAt)));
+    addPoints(api, player.slot, (inkLength(pts) / INK_PER_POINT) * (1 + 4 * t));
+    return [];
+  },
+  score: ({ state }) => pointsFrom(state),
 };
 
-// ---- King of the Hill: ink laid on the moving hill earns hill points -------------------------
-
-const countMap = (v: unknown): Record<string, number> => ({ ...((v as Record<string, number> | undefined) ?? {}) });
+// ---- King of the Hill: ink laid on the moving hill earns points ---------------------------------
 
 const hill: Mode = {
   ...plain('hill'),
   init: () => ({ pts: {} }),
   onPoints({ player, pts, now, round, api }) {
-    const h = hillAt(round.idx, round.startsAt, now);
-    const inside = pts.filter((p) => inCircle(p, h)).length;
-    if (inside > 0) {
-      const mine = countMap(api.state?.pts);
-      mine[String(player.slot)] = (mine[String(player.slot)] ?? 0) + inside;
-      api.setState({ pts: mine });
-    }
+    addPoints(api, player.slot, inkInside(pts, hillAt(round.idx, round.startsAt, now)) / INK_PER_POINT);
     return [];
   },
-  score({ grid, state }) {
-    const shares = grid.shares();
-    const hillPts = countMap(state?.pts);
-    const total = Object.values(hillPts).reduce((a, b) => a + b, 0);
-    const out: Record<number, number> = {};
-    for (const [owner, share] of Object.entries(shares)) out[Number(owner)] = 0.6 * share;
-    if (total > 0) {
-      for (const [owner, n] of Object.entries(hillPts)) out[Number(owner)] = (out[Number(owner)] ?? 0) + (0.4 * n) / total;
-    }
-    return out;
-  },
+  score: ({ state }) => pointsFrom(state),
 };
 
-// ---- Capture the Flag: Lasso, plus a flag that a closed loop can capture ---------------------
+// ---- Capture the Flag: Lasso. A capture is worth 100 points, every closed loop 5 ---------------
+
+const CAPTURE_POINTS = 100;
+const LOOP_POINTS = 5;
 
 const ctf: Mode = {
   ...plain('ctf'),
-  init: () => ({ n: 0, caps: {} }),
+  init: () => ({ n: 0, caps: {}, loops: {} }),
   onPoints: encloseOnPoints,
   onFill({ player, poly, round, api }) {
     const n = Number(api.state?.n ?? 0);
-    if (!pointInPolygon(flagAt(round.idx, n), poly)) return;
+    const key = String(player.slot);
+    const loops = countMap(api.state?.loops);
+    loops[key] = (loops[key] ?? 0) + 1;
     const caps = countMap(api.state?.caps);
-    caps[String(player.slot)] = (caps[String(player.slot)] ?? 0) + 1;
-    api.setState({ n: n + 1, caps });
+    if (pointInPolygon(flagAt(round.idx, n), poly)) {
+      caps[key] = (caps[key] ?? 0) + 1;
+      api.setState({ n: n + 1, caps, loops });
+    } else {
+      api.setState({ n, caps, loops });
+    }
   },
-  score({ grid, state }) {
-    const out: Record<number, number> = { ...grid.shares() };
-    for (const [owner, n] of Object.entries(countMap(state?.caps))) out[Number(owner)] = (out[Number(owner)] ?? 0) + 0.08 * n;
+  score({ state }) {
+    const out: Record<number, number> = {};
+    for (const [slot, n] of Object.entries(countMap(state?.caps))) out[Number(slot)] = (out[Number(slot)] ?? 0) + CAPTURE_POINTS * n;
+    for (const [slot, n] of Object.entries(countMap(state?.loops))) out[Number(slot)] = (out[Number(slot)] ?? 0) + LOOP_POINTS * n;
     return out;
   },
 };

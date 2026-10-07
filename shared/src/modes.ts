@@ -16,6 +16,8 @@ export interface ModeDef {
   brush: number;
   /** Players can erase with this brush radius (Shift or the Eraser toggle). */
   eraseBrush?: number;
+  /** What the leaderboard counts: territory percent (default) or points. */
+  scoreUnit?: 'percent' | 'points';
   /** Other players' ink is hidden except near your cursor until the round is over. */
   fog?: boolean;
   overlay?: (round: OverlayRound, now: number, state: ModeState | null) => OverlayShape[];
@@ -49,15 +51,16 @@ export const MODE_DEFS: Record<ModeId, ModeDef> = {
   hotzones: {
     id: 'hotzones',
     name: 'Hot Zones',
-    rules: 'Three glowing zones are worth 5x. Own them.',
+    rules: 'Hold the three zones: whoever owns the most ground in a zone earns points every second.',
     howTo: [
       'Three dashed zones are marked on the canvas.',
-      'Ground inside a zone counts five times as much.',
-      'Fight for the zones, then fill in around them.',
+      'Every second, whoever owns the most ground inside a zone earns 5 points.',
+      'Paint over the leader to take the points for yourself.',
       WIN,
     ],
     brush: 6,
-    overlay: (round) => hotZones(round.idx).map((c) => ({ kind: 'circle' as const, ...c, label: '5×', tone: 'zone' as const })),
+    scoreUnit: 'points',
+    overlay: (round) => hotZones(round.idx).map((c) => ({ kind: 'circle' as const, ...c, label: '5 pts/s', tone: 'zone' as const })),
   },
   hill: {
     id: 'hill',
@@ -65,11 +68,12 @@ export const MODE_DEFS: Record<ModeId, ModeDef> = {
     rules: 'Paint on the hill to earn points. The hill moves every 10 seconds.',
     howTo: [
       'A green hill is marked on the canvas and jumps every 10 seconds.',
-      'Every bit of ink you lay on the hill earns hill points.',
-      'Your score is 60% territory and 40% your share of the hill points.',
+      'Every 10 px of ink you lay on the hill earns 1 point.',
+      'Only hill points count: how much canvas you own does not matter.',
       WIN,
     ],
     brush: 6,
+    scoreUnit: 'points',
     overlay: (round, now) => [{ kind: 'circle', ...hillAt(round.idx, round.startsAt, now), label: 'HILL', tone: 'hill' }],
   },
   enclose: {
@@ -87,14 +91,15 @@ export const MODE_DEFS: Record<ModeId, ModeDef> = {
   ctf: {
     id: 'ctf',
     name: 'Capture the Flag',
-    rules: 'Loop a lasso around the flag to capture it for bonus points.',
+    rules: 'Loop a lasso around the flag to capture it for 100 points.',
     howTo: [
       'This is Lasso: cross your own line to close a loop that fills with your color.',
-      'Close a loop around the flag to capture it: +8% bonus per capture.',
-      'After a capture the flag jumps somewhere else.',
+      'Close a loop around the flag to capture it: 100 points. The flag then jumps somewhere else.',
+      'Every loop you close is worth 5 points, even if it misses the flag.',
       WIN,
     ],
     brush: 6,
+    scoreUnit: 'points',
     overlay: (round, _now, state) => [{ kind: 'circle', ...flagAt(round.idx, Number(state?.n ?? 0)), label: 'FLAG', tone: 'flag' }],
   },
   fog: {
@@ -126,14 +131,15 @@ export const MODE_DEFS: Record<ModeId, ModeDef> = {
   shrink: {
     id: 'shrink',
     name: 'Shrinking Zone',
-    rules: 'The safe area shrinks. You can only paint inside it.',
+    rules: 'The safe area shrinks. Ink earns more points the tighter it gets.',
     howTo: [
       'The ring shrinks toward the middle all round long.',
       'You can only paint inside the ring.',
-      'Ground you already painted outside still counts.',
-      'Whoever owns the most canvas when time runs out wins.',
+      'Ink earns points: 1 point per 10 px at the start, up to 5x as much when the ring is tight.',
+      WIN,
     ],
     brush: 6,
+    scoreUnit: 'points',
     overlay: (round, now) => [{ kind: 'ring', ...ringAt(round, now) }],
   },
   teams: {

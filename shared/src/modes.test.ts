@@ -20,6 +20,20 @@ describe('MODE_DEFS', () => {
     expect(MODE_DEFS.eraser.eraseBrush).toBeGreaterThan(MODE_DEFS.eraser.brush);
   });
 
+  it('scores four modes in points and every other mode in territory percent', () => {
+    const points = ['hotzones', 'hill', 'ctf', 'shrink'];
+    for (const id of MODE_ORDER) {
+      expect(MODE_DEFS[id].scoreUnit ?? 'percent').toBe(points.includes(id) ? 'points' : 'percent');
+    }
+  });
+
+  it('spells the point rules out in the how-to lines', () => {
+    expect(MODE_DEFS.hotzones.howTo.join(' ')).toMatch(/5 points/);
+    expect(MODE_DEFS.hill.howTo.join(' ')).toMatch(/points/);
+    expect(MODE_DEFS.ctf.howTo.join(' ')).toMatch(/100 points/);
+    expect(MODE_DEFS.shrink.howTo.join(' ')).toMatch(/points/);
+  });
+
   it('gives Splat a much bigger brush than Paint War', () => {
     expect(MODE_DEFS.splat.brush).toBeGreaterThanOrEqual(MODE_DEFS.paint.brush * 3);
   });

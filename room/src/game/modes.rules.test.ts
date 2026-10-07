@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { GameEngine } from './engine';
 import { MemoryStore } from '../store/memoryStore';
-import { TEAMS, flagAt, hillAt, hotZones, inCircle, type ModeId, type ServerMsg } from '@gallery/shared';
+import { PALETTE, TEAMS, flagAt, hillAt, hotZones, inCircle, type ModeId, type ServerMsg } from '@gallery/shared';
 import type { Outbound } from './types';
 
 const ROUND = 100_000;
@@ -16,23 +16,87 @@ const line = (x0: number, y0: number, x1: number, y1: number, n = 12) =>
   Array.from({ length: n }, (_, i) => [Math.round(x0 + ((x1 - x0) * i) / (n - 1)), Math.round(y0 + ((y1 - y0) * i) / (n - 1))]).flat();
 
 describe('Hot Zones', () => {
-  it('weights ground inside the zones 5x and ground outside less than plain territory', () => {
+  /** Paint a block of ground (a few parallel lines) centered on (cx, cy). */
+  const paintBlock = (e: GameEngine, who: string, sid: string, cx: number, cy: number, half: number, rows: number, now: number) => {
+    for (let r = 0; r < rows; r++) {
+      e.onStroke(who, stroke(`${sid}${r}`, line(cx - half, cy - 18 + r * 12, cx + half, cy - 18 + r * 12, 8)), now);
+    }
+  };
+  const pointsOf = (e: GameEngine, n: number) =>
+    Number((e.modeState!.pts as Record<string, number> | undefined)?.[String(e.players.get(id(n))!.slot)] ?? 0);
+  const farFromZones = () => {
+    const zones = hotZones(0);
+    return [{ x: 60, y: 60 }, { x: 1540, y: 940 }, { x: 60, y: 940 }, { x: 1540, y: 60 }]
+      .find((p) => zones.every((q) => !inCircle({ x: p.x + 60, y: p.y }, { ...q, r: q.r + 80 })))!;
+  };
+
+  it('awards 5 points every second to whoever owns the most ground inside a zone', () => {
     const e = make('hotzones', 1000);
     e.join(id(1), 'Ann', undefined, 1000);
     e.join(id(2), 'Bob', undefined, 1000);
     const [z] = hotZones(0);
-    // an inside stroke (centered in the first zone) and an equally long stroke far from every zone
-    const far = [{ x: 60, y: 60 }, { x: 1540, y: 940 }, { x: 60, y: 940 }, { x: 1540, y: 60 }]
-      .find((p) => hotZones(0).every((q) => !inCircle({ x: p.x + 60, y: p.y }, { ...q, r: q.r + 80 })))!;
-    e.onStroke(id(1), stroke('a', line(z!.x - 60, z!.y, z!.x + 60, z!.y)), 1100);
-    e.onStroke(id(2), stroke('b', line(far.x, far.y, far.x + 120, far.y)), 1100);
-    const territoryA = e.grid.shares()[e.players.get(id(1))!.slot]!;
-    const scores = of(e.tick(1200), 'scores')[0]!.msg.shares;
-    const inside = scores[e.players.get(id(1))!.slot]!;
-    const outside = scores[e.players.get(id(2))!.slot]!;
-    expect(inside / territoryA).toBeGreaterThan(3);
-    expect(inside / territoryA).toBeLessThan(4.2);
-    expect(inside).toBeGreaterThan(outside);
+    paintBlock(e, id(1), 'a', z!.x, z!.y, 60, 3, 1100); // Ann: a big block in the zone
+    paintBlock(e, id(2), 'b', z!.x, z!.y + 70, 20, 1, 1100); // Bob: a small line in the same zone
+    e.tick(2000); e.tick(3000); e.tick(4000);
+    expect(pointsOf(e, 1)).toBe(15);
+    expect(pointsOf(e, 2)).toBe(0);
+  });
+
+  it('moves the awards when the lead changes hands', () => {
+    const e = make('hotzones', 1000);
+    e.join(id(1), 'Ann', undefined, 1000);
+    e.join(id(2), 'Bob', undefined, 1000);
+    const [z] = hotZones(0);
+    paintBlock(e, id(1), 'a', z!.x, z!.y, 40, 2, 1100);
+    e.tick(2000);
+    expect(pointsOf(e, 1)).toBe(5);
+    paintBlock(e, id(2), 'b', z!.x, z!.y, 70, 4, 2100); // Bob paints over Ann and more
+    e.tick(3000); e.tick(4000);
+    expect(pointsOf(e, 1)).toBe(5);
+    expect(pointsOf(e, 2)).toBe(10);
+  });
+
+  it('awards nothing for ground outside every zone or for a mere dot inside one', () => {
+    const e = make('hotzones', 1000);
+    e.join(id(1), 'Ann', undefined, 1000);
+    e.join(id(2), 'Bob', undefined, 1000);
+    const far = farFromZones();
+    paintBlock(e, id(1), 'a', far.x + 60, far.y, 50, 3, 1100);
+    e.onStroke(id(2), stroke('dot', [hotZones(0)[0]!.x, hotZones(0)[0]!.y]), 1100); // one dot: fewer than 15 cells
+    e.tick(2000); e.tick(3000);
+    expect(pointsOf(e, 1)).toBe(0);
+    expect(pointsOf(e, 2)).toBe(0);
+  });
+
+  it('pays out each zone separately', () => {
+    const e = make('hotzones', 1000);
+    e.join(id(1), 'Ann', undefined, 1000);
+    for (const [i, z] of hotZones(0).entries()) paintBlock(e, id(1), `z${i}`, z.x, z.y, 40, 2, 1100);
+    e.tick(2000);
+    expect(pointsOf(e, 1)).toBe(15);
+  });
+
+  it('scores in points, not territory: huge territory outside the zones scores nothing', () => {
+    const e = make('hotzones', 1000);
+    e.join(id(1), 'Ann', undefined, 1000);
+    e.join(id(2), 'Bob', undefined, 1000);
+    const far = farFromZones();
+    paintBlock(e, id(2), 'big', far.x + 60, far.y, 50, 3, 1100);
+    paintBlock(e, id(1), 'a', hotZones(0)[0]!.x, hotZones(0)[0]!.y, 30, 2, 1100);
+    const scores = of(e.tick(2000), 'scores')[0]!.msg.shares;
+    expect(scores[e.players.get(id(1))!.slot]).toBe(5);
+    expect(scores[e.players.get(id(2))!.slot] ?? 0).toBe(0);
+  });
+
+  it('keeps its points across a server restart', () => {
+    const store = new MemoryStore();
+    const e = make('hotzones', 1000, store);
+    e.join(id(1), 'Ann', undefined, 1000);
+    paintBlock(e, id(1), 'a', hotZones(0)[0]!.x, hotZones(0)[0]!.y, 40, 2, 1100);
+    e.tick(2000);
+    e.flush();
+    const r = make('hotzones', 2500, store);
+    expect(r.modeState).toEqual(e.modeState);
   });
 });
 
@@ -72,23 +136,33 @@ describe('Shrinking Zone', () => {
 });
 
 describe('King of the Hill', () => {
-  it('counts only the ink laid on the current hill and blends it into the score', () => {
+  const offHill = (hill: { x: number; y: number; r: number }) =>
+    [{ x: 100, y: 100 }, { x: 1500, y: 900 }, { x: 100, y: 900 }, { x: 1500, y: 100 }].find((p) => !inCircle(p, { ...hill, r: hill.r + 150 }))!;
+
+  it('pays 1 point per 10 px of ink laid on the current hill and nothing for ink elsewhere', () => {
     const e = make('hill', 1000);
     e.join(id(1), 'Ann', undefined, 1000);
     e.join(id(2), 'Bob', undefined, 1000);
     const hill = hillAt(0, 0, 1100);
-    // Ann paints on the hill; Bob paints the same amount of ink far away from it
-    const spot = [{ x: 100, y: 100 }, { x: 1500, y: 900 }, { x: 100, y: 900 }, { x: 1500, y: 100 }]
-      .find((p) => !inCircle(p, { ...hill, r: hill.r + 150 }))!;
+    const spot = offHill(hill);
+    e.onStroke(id(1), stroke('a', line(hill.x - 40, hill.y, hill.x + 40, hill.y, 6)), 1100); // 80 px on the hill
+    e.onStroke(id(2), stroke('b', line(spot.x, spot.y, spot.x + 80, spot.y, 6)), 1100); // 80 px elsewhere
+    const pts = e.modeState!.pts as Record<string, number>;
+    expect(pts[String(e.players.get(id(1))!.slot)]).toBeCloseTo(8, 5);
+    expect(pts[String(e.players.get(id(2))!.slot)]).toBeUndefined();
+  });
+
+  it('scores in points only: territory does not matter', () => {
+    const e = make('hill', 1000);
+    e.join(id(1), 'Ann', undefined, 1000);
+    e.join(id(2), 'Bob', undefined, 1000);
+    const hill = hillAt(0, 0, 1100);
+    const spot = offHill(hill);
     e.onStroke(id(1), stroke('a', line(hill.x - 40, hill.y, hill.x + 40, hill.y, 6)), 1100);
-    e.onStroke(id(2), stroke('b', line(spot.x, spot.y, spot.x + 80, spot.y, 6)), 1100);
-    expect((e.modeState!.pts as Record<string, number>)[String(e.players.get(id(1))!.slot)]).toBe(6);
-    expect((e.modeState!.pts as Record<string, number>)[String(e.players.get(id(2))!.slot)]).toBeUndefined();
-    const out = e.tick(1200);
-    const scores = of(out, 'scores')[0]!.msg.shares;
-    const a = scores[e.players.get(id(1))!.slot]!;
-    const b = scores[e.players.get(id(2))!.slot]!;
-    expect(a).toBeGreaterThan(b + 0.35); // the 40% hill share all goes to Ann
+    for (let r = 0; r < 4; r++) e.onStroke(id(2), stroke(`b${r}`, line(spot.x, spot.y + r * 14, spot.x + 400, spot.y + r * 14, 10)), 1100);
+    const scores = of(e.tick(1200), 'scores')[0]!.msg.shares;
+    expect(scores[e.players.get(id(1))!.slot]).toBeCloseTo(8, 5);
+    expect(scores[e.players.get(id(2))!.slot] ?? 0).toBe(0);
   });
 
   it('stops counting a spot once the hill has moved away', () => {
@@ -131,13 +205,13 @@ describe('Capture the Flag', () => {
     expect(k).toBeDefined();
     const e = make('ctf', now0);
     e.join(id(1), 'Ann', undefined, now0);
-    expect(e.modeState).toEqual({ n: 0, caps: {} });
+    expect(e.modeState).toEqual({ n: 0, caps: {}, loops: {} });
     e.onStroke(id(1), stroke('s', loopAround(flagAt(k, 0))), now0 + 100);
     const slot = e.players.get(id(1))!.slot;
-    expect(e.modeState).toEqual({ n: 1, caps: { [slot]: 1 } });
+    expect(e.modeState).toEqual({ n: 1, caps: { [slot]: 1 }, loops: { [slot]: 1 } });
     // the flag moved: a second loop around the NEW position captures again
     e.onStroke(id(1), stroke('t', loopAround(flagAt(k, 1))), now0 + 300);
-    expect(e.modeState).toEqual({ n: 2, caps: { [slot]: 2 } });
+    expect(e.modeState).toEqual({ n: 2, caps: { [slot]: 2 }, loops: { [slot]: 2 } });
   });
 
   it('does not capture when the loop misses the flag', () => {
@@ -147,17 +221,18 @@ describe('Capture the Flag', () => {
     const away = { x: f.x < 800 ? f.x + 450 : f.x - 450, y: f.y };
     e.onStroke(id(1), stroke('s', loopAround(away)), now0 + 100);
     expect(e.ops.some((o) => o.k === 'f')).toBe(true); // the loop itself filled
-    expect(e.modeState).toEqual({ n: 0, caps: {} });
+    expect(e.modeState).toEqual({ n: 0, caps: {}, loops: { [e.players.get(id(1))!.slot]: 1 } });
+    const slot = e.players.get(id(1))!.slot;
+    expect(of(e.tick(now0 + 200), 'scores')[0]!.msg.shares[slot]).toBe(5); // a loop that misses is worth 5
   });
 
-  it('adds 8% per capture to the capturer score', () => {
+  it('pays 100 points per capture and 5 per loop closed', () => {
     const e = make('ctf', now0);
     e.join(id(1), 'Ann', undefined, now0);
     e.onStroke(id(1), stroke('s', loopAround(flagAt(k, 0))), now0 + 100);
     const slot = e.players.get(id(1))!.slot;
-    const share = e.grid.shares()[slot]!;
     const score = of(e.tick(now0 + 200), 'scores')[0]!.msg.shares[slot]!;
-    expect(score).toBeCloseTo(share + 0.08, 5);
+    expect(score).toBe(105); // one capture (100) + one loop closed (5): territory does not count
   });
 });
 
@@ -273,5 +348,59 @@ describe('Team Tug-of-War', () => {
     e.flush();
     const r = make('teams', ROUND + 1500, store);
     expect(r.modeState).toEqual(e.modeState);
+  });
+});
+
+describe('leaving a team mode', () => {
+  it('re-sends the player list at the start of the next round so team colors and teams are cleared', () => {
+    const cfg = { roundMs: ROUND, overMs: OVER, order: ['teams', 'paint'] as ModeId[], password: '' };
+    const e = new GameEngine(cfg, new MemoryStore(), 1000);
+    for (let i = 1; i <= 6; i++) e.join(id(i), `P${i}`, undefined, 1000);
+    const teamsRound = of(e.tick(ROUND * 2 + 1000), 'players').at(-1)!.msg.players; // idx 2 = teams again
+    expect(teamsRound.every((p) => p.team !== undefined)).toBe(true);
+    const paintRound = of(e.tick(ROUND * 3 + 1000), 'players').at(-1)!.msg.players; // idx 3 = paint
+    expect(paintRound.every((p) => p.team === undefined)).toBe(true);
+    // colors are back to the plain palette colors
+    const palette = new Set(PALETTE);
+    expect(paintRound.every((p) => palette.has(p.color))).toBe(true);
+  });
+});
+
+describe('Shrinking Zone points', () => {
+  const pts = (e: GameEngine, n: number) => Number((e.modeState!.pts as Record<string, number>)[String(e.players.get(id(n))!.slot)] ?? 0);
+
+  it('pays about 1 point per 10 px of ink early in the round', () => {
+    const e = make('shrink', 1000);
+    e.join(id(1), 'Ann', undefined, 1000);
+    e.onStroke(id(1), stroke('s', line(400, 500, 500, 500, 6)), 1100); // 100 px at the start of the round
+    expect(pts(e, 1)).toBeGreaterThan(9.5);
+    expect(pts(e, 1)).toBeLessThan(11.5);
+  });
+
+  it('pays up to 5x as the ring closes in', () => {
+    const early = make('shrink', 1000);
+    early.join(id(1), 'Ann', undefined, 1000);
+    early.onStroke(id(1), stroke('a', line(780, 500, 840, 500, 6)), 1100);
+    const late = make('shrink', 85_000);
+    late.join(id(1), 'Ann', undefined, 85_000);
+    late.onStroke(id(1), stroke('a', line(780, 500, 840, 500, 6)), 85_100);
+    expect(pts(late, 1) / pts(early, 1)).toBeGreaterThan(4);
+    expect(pts(late, 1) / pts(early, 1)).toBeLessThan(5.2);
+  });
+
+  it('scores in points: the scores message carries the points, not territory', () => {
+    const e = make('shrink', 85_000);
+    e.join(id(1), 'Ann', undefined, 85_000);
+    e.onStroke(id(1), stroke('a', line(780, 500, 840, 500, 6)), 85_100);
+    const scores = of(e.tick(85_200), 'scores')[0]!.msg.shares;
+    expect(scores[e.players.get(id(1))!.slot]).toBeCloseTo(pts(e, 1), 5);
+    expect(scores[e.players.get(id(1))!.slot]!).toBeGreaterThan(1);
+  });
+
+  it('pays nothing for ink outside the ring', () => {
+    const e = make('shrink', 85_000);
+    e.join(id(1), 'Ann', undefined, 85_000);
+    e.onStroke(id(1), stroke('a', line(20, 20, 200, 20, 6)), 85_100);
+    expect(e.modeState!.pts).toEqual({});
   });
 });

@@ -1,10 +1,11 @@
 import type { PlayerInfo, RoundInfo } from '@gallery/shared';
 import { formatCountdown } from '../useNow';
 import { winnerLabel } from './teamBoard';
+import { formatScore, type ScoreUnit } from './score';
 
-interface Props { round: RoundInfo; winner: PlayerInfo | undefined; share: number; now: number }
+interface Props { round: RoundInfo; winner: PlayerInfo | undefined; share: number; now: number; unit?: ScoreUnit }
 
-export function RoundOver({ round, winner, share, now }: Props) {
+export function RoundOver({ round, winner, share, now, unit = 'percent' }: Props) {
   const label = winnerLabel(winner);
   return (
     <div className="round-over">
@@ -14,7 +15,7 @@ export function RoundOver({ round, winner, share, now }: Props) {
           {label ? (
             <>
               <div className="winner" style={{ color: label.color }}>{label.text}</div>
-              <div className="winner-line">wins with {(share * 100).toFixed(1)}%</div>
+              <div className="winner-line">wins with {formatScore(share, unit)}</div>
             </>
           ) : (
             <div className="winner-line">Nobody painted this round</div>

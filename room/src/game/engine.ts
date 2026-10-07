@@ -208,6 +208,7 @@ export class GameEngine {
 
   setModeState(next: ModeState | null): void {
     this.modeState = next;
+    this.scoresDirty = true; // point scores are derived from the mode state
     this.modeStateDirty = true;
     this.metaDirty = true;
   }
@@ -217,6 +218,11 @@ export class GameEngine {
   tick(now: number): Outbound[] {
     this.clockNow = now;
     const out = this.advance(now);
+    if (this.roundIdx >= 0 && phaseAt(now, this.cfg.roundMs, this.cfg.overMs).phase === 'playing') {
+      this.entry(this.roundIdx).rules.onTick?.({
+        now, round: this.roundRef(), grid: this.grid, players: [...this.players.values()], api: this.modeApi,
+      });
+    }
     if (this.scoresDirty) {
       this.scoresDirty = false;
       out.push({ to: 'all', msg: { t: 'scores', shares: this.scores() } });
@@ -302,6 +308,9 @@ export class GameEngine {
         to: 'all',
         msg: { t: 'round', round: this.roundInfo(now), winnerPid: null, wipe: true, history: this.history },
       });
+      // Clients keep the last player list, so a new round must re-send it: modes can recolor players or put them
+      // on teams, and the previous mode's colors/teams must not leak into this one.
+      out.push({ to: 'all', msg: { t: 'players', players: this.playerInfos() } });
     }
     if (w.phase === 'over' && !this.finalized) {
       this.finalize();

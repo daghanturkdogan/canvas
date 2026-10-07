@@ -33,6 +33,7 @@ export function Gallery({ state, send, subscribe, getRoundOps, opLog, onLeave }:
   const playing = round?.phase === 'playing' && state.conn === 'open';
   const fogOn = !!def?.fog && round?.phase === 'playing';
   const winner = state.players.find((p) => p.pid === state.winnerPid);
+  const unit = def?.scoreUnit ?? 'percent';
 
   const shrinking = round?.mode === 'shrink' ? round : null;
   const allow = useMemo(
@@ -49,7 +50,7 @@ export function Gallery({ state, send, subscribe, getRoundOps, opLog, onLeave }:
         <button className="leave" onClick={onLeave}>Not you?</button>
       </header>
       <main className="wall">
-        <Leaderboard players={state.players} shares={state.shares} you={state.you} fogged={fogOn} />
+        <Leaderboard players={state.players} shares={state.shares} you={state.you} fogged={fogOn} unit={unit} />
         <section className="centerpiece">
           <div className="frame">
             <div className="mat">
@@ -62,7 +63,7 @@ export function Gallery({ state, send, subscribe, getRoundOps, opLog, onLeave }:
                 <CursorLayer cursors={cursors} players={state.players} you={state.you} hidden={fogOn} />
                 {round && <OverlayLayer shapes={overlayShapes(MODE_DEFS[round.mode], round, now, state.modeState)} />}
                 {round?.phase === 'over' && (
-                  <RoundOver round={round} winner={winner} share={state.shares[state.winnerPid ?? -1] ?? 0} now={now} />
+                  <RoundOver round={round} winner={winner} share={state.shares[state.winnerPid ?? -1] ?? 0} now={now} unit={unit} />
                 )}
               </div>
             </div>

@@ -1,4 +1,5 @@
-import { MODE_ORDER, OVER_MS, ROUND_MS, type ClientMsg } from '@gallery/shared';
+import type { ClientMsg } from '@gallery/shared';
+import { engineConfig } from './config';
 import { GameEngine } from './game/engine';
 import type { Outbound } from './game/types';
 import { SqlStore } from './store/sqlStore';
@@ -20,14 +21,7 @@ export class Room implements DurableObject {
 
   constructor(private ctx: DurableObjectState, private env: Env) {
     ctx.blockConcurrencyWhile(async () => {
-      const minutes = Number(env.ROUND_MINUTES);
-      const roundMs = Number.isFinite(minutes) && minutes > 0 ? minutes * 60_000 : ROUND_MS;
-      const overMs = Math.min(OVER_MS, Math.floor(roundMs / 4));
-      this.engine = new GameEngine(
-        { roundMs, overMs, order: MODE_ORDER, password: env.ROOM_PASSWORD ?? '' },
-        new SqlStore(ctx.storage.sql),
-        Date.now(),
-      );
+      this.engine = new GameEngine(engineConfig(env), new SqlStore(ctx.storage.sql), Date.now());
       await this.scheduleAlarm();
     });
   }

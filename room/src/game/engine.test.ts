@@ -500,3 +500,27 @@ describe('framework hooks v2 (fake modes)', () => {
     expect(next.round.mode).toBe(scheduledMode(1));
   });
 });
+
+describe('onTick hook', () => {
+  const base: ModeEntry = { def: fakeDef('base'), rules: { id: 'paint', name: 'base', rules: 'r', onPoints: () => [] } };
+
+  it('runs on every tick while drawing is open, never in the over phase, and can update state and scores', () => {
+    const rules = {
+      ...base.rules,
+      init: () => ({ n: 0 }),
+      onTick: ({ api }: { api: { state: Record<string, unknown> | null; setState(s: Record<string, unknown>): void } }) => {
+        api.setState({ n: Number(api.state?.n ?? 0) + 1 });
+      },
+      score: ({ state }: { state: Record<string, unknown> | null }) => ({ 1: Number(state?.n ?? 0) }),
+    };
+    const e = new GameEngine(fakeCfg({ base: { def: fakeDef('base'), rules } }, ['base']), new MemoryStore(), 0);
+    e.join(id(1), 'Ann', undefined, 0);
+    e.tick(100); e.tick(200); e.tick(300);
+    expect(e.modeState).toEqual({ n: 3 });
+    const out = e.tick(400);
+    expect(of(out, 'scores')[0]!.msg.shares[1]).toBe(4); // scores are re-sent because the state changed
+    e.tick(950); // over phase
+    expect(e.modeState).toEqual({ n: 4 });
+  });
+});
+
