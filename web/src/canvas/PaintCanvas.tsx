@@ -13,7 +13,7 @@ interface Props {
   cursors: MutableRefObject<CursorMap>;
 }
 
-const FLUSH_MS = 66;
+const FLUSH_MS = 100;
 
 export function PaintCanvas({ send, subscribe, players, you, enabled, cursors }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
