@@ -1,0 +1,19 @@
+{
+  "name": "@gallery/room",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "smoke": "tsx scripts/smoke.ts"
+  },
+  "dependencies": { "@gallery/shared": "*" },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250101.0",
+    "@types/ws": "^8.5.0",
+    "tsx": "^4.19.0",
+    "wrangler": "^4.0.0",
+    "ws": "^8.18.0"
+  }
+}
