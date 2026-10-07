@@ -128,3 +128,5 @@ body { background: #120d0a; color: #efe3cf; }
 .team-members { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 15px; padding-left: 22px; }
 .team-members .me { font-weight: 700; }
 .swatch.small { display: inline-block; width: 9px; height: 9px; margin-right: 5px; }
+
+.takeover { padding: 6px 14px; font: 600 15px 'Cormorant Garamond', serif; letter-spacing: .04em; color: #2a1d06; background: linear-gradient(#e9d28f, #b8934a); border: 1px solid #7a5c1e; border-radius: 3px; cursor: pointer; text-transform: none; }

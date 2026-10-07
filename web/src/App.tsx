@@ -11,7 +11,7 @@ const clientId = getClientId();
 export function App() {
   const [name, setName] = useState<string | null>(getSavedName());
   const [password, setPassword] = useState<string | undefined>();
-  const { state, send, subscribe, getRoundOps, opLog } = useRoom({ url: ROOM_URL, clientId, name, password });
+  const { state, send, subscribe, getRoundOps, opLog, takeOver } = useRoom({ url: ROOM_URL, clientId, name, password });
 
   const joined = name !== null && state.you !== null && state.error === null;
   if (!joined) {
@@ -29,6 +29,7 @@ export function App() {
       subscribe={subscribe}
       getRoundOps={getRoundOps}
       opLog={opLog}
+      onTakeOver={takeOver}
       onLeave={() => { clearName(); location.reload(); }}
     />
   );

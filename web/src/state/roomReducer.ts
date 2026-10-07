@@ -1,7 +1,7 @@
 import type { ModeState, PlayerInfo, RoundInfo, RoundSummary, ServerMsg } from '@gallery/shared';
 
 export interface RoomState {
-  conn: 'connecting' | 'open' | 'closed';
+  conn: 'connecting' | 'open' | 'closed' | 'replaced';
   error: string | null;
   you: number | null;
   players: PlayerInfo[];

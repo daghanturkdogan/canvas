@@ -20,11 +20,12 @@ interface Props {
   subscribe: (fn: (m: ServerMsg) => void) => () => void;
   getRoundOps: (idx: number) => Promise<Op[]>;
   opLog: OpLog;
+  onTakeOver: () => void;
   onLeave: () => void;
   children?: ReactNode;
 }
 
-export function Gallery({ state, send, subscribe, getRoundOps, opLog, onLeave }: Props) {
+export function Gallery({ state, send, subscribe, getRoundOps, opLog, onTakeOver, onLeave }: Props) {
   const cursors = useRef<CursorMap>(new Map());
   const [erasing, setErasing] = useState(false);
   const now = useNow(state.clockOffset);
@@ -46,7 +47,11 @@ export function Gallery({ state, send, subscribe, getRoundOps, opLog, onLeave }:
     <div className="gallery">
       <header className="marquee">
         <span>Canvas Gallery</span>
-        <span className="conn">{state.conn === 'open' ? '' : state.conn === 'connecting' ? 'Connecting…' : 'Reconnecting…'}</span>
+        {state.conn === 'replaced' ? (
+          <button className="takeover" onClick={onTakeOver}>Open in another tab — click to play here</button>
+        ) : (
+          <span className="conn">{state.conn === 'open' ? '' : state.conn === 'connecting' ? 'Connecting…' : 'Reconnecting…'}</span>
+        )}
         <button className="leave" onClick={onLeave}>Not you?</button>
       </header>
       <main className="wall">

@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useReducer, useRef } from 'react';
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import type { ClientMsg, Op, ServerMsg } from '@gallery/shared';
 import { initialState, reduce, type RoomState } from '../state/roomReducer';
 import { OpLog } from '../canvas/opLog';
+import { reconnectDelay, shouldReconnect } from './reconnect';
 
 interface Opts { url: string; clientId: string; name: string | null; password?: string }
 
 export function useRoom({ url, clientId, name, password }: Opts) {
   const [state, dispatch] = useReducer(reduce, initialState);
+  const [epoch, setEpoch] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
   const listeners = useRef(new Set<(m: ServerMsg) => void>());
   const pending = useRef(new Map<number, (ops: Op[]) => void>());
@@ -59,10 +61,14 @@ export function useRoom({ url, clientId, name, password }: Opts) {
         dispatch({ type: 'server', msg, localNow: Date.now() });
         listeners.current.forEach((fn) => fn(msg));
       };
-      ws.onclose = () => {
+      ws.onclose = (ev) => {
         if (closed) return;
+        if (!shouldReconnect(ev.reason)) {
+          dispatch({ type: 'conn', conn: 'replaced' });
+          return;
+        }
         dispatch({ type: 'conn', conn: 'closed' });
-        retry = setTimeout(connect, Math.min(5000, 500 * 2 ** attempt++));
+        retry = setTimeout(connect, reconnectDelay(attempt++));
       };
     };
     connect();
@@ -71,7 +77,10 @@ export function useRoom({ url, clientId, name, password }: Opts) {
       clearTimeout(retry);
       wsRef.current?.close();
     };
-  }, [url, clientId, name, password]);
+  }, [url, clientId, name, password, epoch]);
 
-  return { state: state as RoomState, send, subscribe, getRoundOps, opLog: opLog.current };
+  /** Play in this tab again after another tab took over. */
+  const takeOver = useCallback(() => setEpoch((e) => e + 1), []);
+
+  return { state: state as RoomState, send, subscribe, getRoundOps, opLog: opLog.current, takeOver };
 }
