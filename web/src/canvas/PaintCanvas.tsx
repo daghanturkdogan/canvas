@@ -1,6 +1,6 @@
 import { useEffect, useRef, type MutableRefObject } from 'react';
 import { CANVAS_H, CANVAS_W, MAX_PTS_PER_MSG, type ClientMsg, type PlayerInfo, type ServerMsg } from '@gallery/shared';
-import { chunkPoints, clearCanvas, drawFill, drawOps, drawSegment } from './render';
+import { chunkPoints, clearCanvas, drawFill, drawOps, drawSegment, inkColor } from './render';
 import type { OpLog } from './opLog';
 
 export type CursorMap = Map<number, { x: number; y: number; at: number }>;
@@ -12,12 +12,13 @@ interface Props {
   players: PlayerInfo[];
   you: number | null;
   enabled: boolean;
+  brush: number;
   cursors: MutableRefObject<CursorMap>;
 }
 
 const FLUSH_MS = 100;
 
-export function PaintCanvas({ send, subscribe, opLog, players, you, enabled, cursors }: Props) {
+export function PaintCanvas({ send, subscribe, opLog, players, you, enabled, brush, cursors }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const colors = useRef(new Map<number, string>());
   const lastPt = useRef(new Map<string, { x: number; y: number }>());
@@ -26,12 +27,14 @@ export function PaintCanvas({ send, subscribe, opLog, players, you, enabled, cur
   enabledRef.current = enabled;
   const youRef = useRef(you);
   youRef.current = you;
+  const brushRef = useRef(brush);
+  brushRef.current = brush;
 
   useEffect(() => {
     colors.current = new Map(players.map((p) => [p.pid, p.color]));
   }, [players]);
 
-  const colorOf = (pid: number) => colors.current.get(pid) ?? '#888888';
+  const colorOf = (pid: number) => inkColor(pid, colors.current);
   const ctx = () => canvasRef.current!.getContext('2d')!;
 
   useEffect(() => {
@@ -39,21 +42,22 @@ export function PaintCanvas({ send, subscribe, opLog, players, you, enabled, cur
     // so replay what the log already holds, then stay subscribed for live updates.
     colors.current = new Map(players.map((p) => [p.pid, p.color]));
     clearCanvas(ctx());
-    drawOps(ctx(), opLog.snapshot(), colorOf);
+    drawOps(ctx(), opLog.snapshot(), colorOf, 1, brushRef.current);
     return subscribe((m) => {
       const c = ctx();
       if (m.t === 'welcome') {
         colors.current = new Map(m.players.map((p) => [p.pid, p.color]));
         lastPt.current.clear();
         clearCanvas(c);
-        drawOps(c, m.ops, colorOf);
+        brushRef.current = m.round.brush;
+        drawOps(c, m.ops, colorOf, 1, m.round.brush);
       } else if (m.t === 'round' && m.wipe) {
         lastPt.current.clear();
         clearCanvas(c);
         cursors.current.clear();
       } else if (m.t === 'stroke') {
         const key = `${m.pid}:${m.id}`;
-        drawSegment(c, colorOf(m.pid), m.pts, lastPt.current.get(key) ?? null);
+        drawSegment(c, colorOf(m.pid), m.pts, lastPt.current.get(key) ?? null, 1, brushRef.current);
         lastPt.current.set(key, { x: m.pts[m.pts.length - 2]!, y: m.pts[m.pts.length - 1]! });
         cursors.current.set(m.pid, { x: m.pts[m.pts.length - 2]!, y: m.pts[m.pts.length - 1]!, at: performance.now() });
       } else if (m.t === 'fill') {
@@ -85,7 +89,7 @@ export function PaintCanvas({ send, subscribe, opLog, players, you, enabled, cur
     e.currentTarget.setPointerCapture(e.pointerId);
     const id = Math.random().toString(36).slice(2, 10);
     const p = toCanvas(e);
-    drawSegment(ctx(), colorOf(youRef.current), [p.x, p.y], null);
+    drawSegment(ctx(), colorOf(youRef.current), [p.x, p.y], null, 1, brushRef.current);
     opLog.addLocalPoints(youRef.current, id, [p.x, p.y]);
     lastPt.current.set(`${youRef.current}:${id}`, p);
     draw.current = { id, buf: [p.x, p.y], timer: setInterval(() => flush(false), FLUSH_MS) };
@@ -98,7 +102,7 @@ export function PaintCanvas({ send, subscribe, opLog, players, you, enabled, cur
     if (!enabledRef.current || e.buttons === 0) return onUp();
     const p = toCanvas(e);
     const key = `${youRef.current}:${d.id}`;
-    drawSegment(ctx(), colorOf(youRef.current!), [p.x, p.y], lastPt.current.get(key) ?? null);
+    drawSegment(ctx(), colorOf(youRef.current!), [p.x, p.y], lastPt.current.get(key) ?? null, 1, brushRef.current);
     lastPt.current.set(key, p);
     opLog.addLocalPoints(youRef.current!, d.id, [p.x, p.y]);
     d.buf.push(p.x, p.y);

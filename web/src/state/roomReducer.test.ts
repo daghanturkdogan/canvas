@@ -3,12 +3,14 @@ import { initialState, reduce } from './roomReducer';
 import type { RoundInfo, ServerMsg } from '@gallery/shared';
 
 const round: RoundInfo = {
-  idx: 5, mode: 'paint', modeName: 'Paint War', rules: 'r', phase: 'playing', startsAt: 0, overAt: 900, endsAt: 1000,
+  idx: 5, mode: 'paint', modeName: 'Paint War', rules: 'r', howTo: ['a'], brush: 6, phase: 'playing',
+  startsAt: 0, overAt: 900, endsAt: 1000,
+  next: { mode: 'splat', name: 'Splat', rules: 'r', howTo: ['b'], brush: 20 },
 };
 const welcome: ServerMsg = {
   t: 'welcome', serverNow: 10_000, you: 3,
   players: [{ pid: 3, name: 'Ann', color: '#fff', online: true, wins: 0 }],
-  round, winnerPid: null, ops: [], shares: { 3: 0.1 }, history: [],
+  round, winnerPid: null, ops: [], shares: { 3: 0.1 }, history: [], modeState: null,
 };
 const srv = (msg: ServerMsg, localNow = 9_000) => ({ type: 'server' as const, msg, localNow });
 
@@ -58,5 +60,18 @@ describe('roomReducer', () => {
   it('ignores messages it does not hold in state', () => {
     const s = reduce(initialState, srv({ t: 'stroke', id: 'a', pid: 1, pts: [1, 2] }));
     expect(s).toBe(initialState);
+  });
+
+  it('stores mode state from welcome and mode-state messages', () => {
+    let s = reduce(initialState, srv({ ...welcome, modeState: { a: 1 } } as ServerMsg));
+    expect(s.modeState).toEqual({ a: 1 });
+    s = reduce(s, srv({ t: 'mode-state', idx: 5, state: { a: 2 } }));
+    expect(s.modeState).toEqual({ a: 2 });
+  });
+
+  it('clears mode state on a wiping round message', () => {
+    let s = reduce(initialState, srv({ ...welcome, modeState: { a: 1 } } as ServerMsg));
+    s = reduce(s, srv({ t: 'round', round: { ...round, idx: 6 }, winnerPid: null, wipe: true, history: [] }));
+    expect(s.modeState).toBeNull();
   });
 });

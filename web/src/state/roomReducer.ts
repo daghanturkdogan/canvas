@@ -1,4 +1,4 @@
-import type { PlayerInfo, RoundInfo, RoundSummary, ServerMsg } from '@gallery/shared';
+import type { ModeState, PlayerInfo, RoundInfo, RoundSummary, ServerMsg } from '@gallery/shared';
 
 export interface RoomState {
   conn: 'connecting' | 'open' | 'closed';
@@ -10,10 +10,12 @@ export interface RoomState {
   winnerPid: number | null;
   history: RoundSummary[];
   clockOffset: number;
+  modeState: ModeState | null;
 }
 
 export const initialState: RoomState = {
-  conn: 'connecting', error: null, you: null, players: [], shares: {}, round: null, winnerPid: null, history: [], clockOffset: 0,
+  conn: 'connecting', error: null, you: null, players: [], shares: {}, round: null, winnerPid: null, history: [],
+  clockOffset: 0, modeState: null,
 };
 
 export type Action =
@@ -27,14 +29,16 @@ export function reduce(state: RoomState, action: Action): RoomState {
     case 'welcome':
       return {
         ...state, error: null, you: m.you, players: m.players, round: m.round, winnerPid: m.winnerPid,
-        shares: m.shares, history: m.history, clockOffset: m.serverNow - action.localNow,
+        shares: m.shares, history: m.history, clockOffset: m.serverNow - action.localNow, modeState: m.modeState,
       };
+    case 'mode-state': return { ...state, modeState: m.state };
     case 'players': return { ...state, players: m.players };
     case 'scores': return { ...state, shares: m.shares };
     case 'round':
       return {
         ...state, round: m.round, winnerPid: m.winnerPid, history: m.history,
         shares: m.wipe ? {} : state.shares,
+        modeState: m.wipe ? null : state.modeState,
       };
     case 'error': return { ...state, error: m.reason };
     default: return state;

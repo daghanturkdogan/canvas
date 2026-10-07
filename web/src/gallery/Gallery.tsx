@@ -41,7 +41,7 @@ export function Gallery({ state, send, subscribe, getRoundOps, opLog, onLeave }:
             <div className="mat">
               <div className="canvas-wrap">
                 <PaintCanvas
-                  send={send} subscribe={subscribe} opLog={opLog} players={state.players} you={state.you} enabled={playing} cursors={cursors}
+                  send={send} subscribe={subscribe} opLog={opLog} players={state.players} you={state.you} enabled={playing} brush={round?.brush ?? 6} cursors={cursors}
                 />
                 <CursorLayer cursors={cursors} players={state.players} you={state.you} />
                 {round?.phase === 'over' && (

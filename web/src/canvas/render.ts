@@ -1,23 +1,32 @@
 import { BRUSH_RADIUS, CANVAS_H, CANVAS_W, type Op } from '@gallery/shared';
 
+export const PAPER = '#f7f1e3';
+
 export function clearCanvas(ctx: CanvasRenderingContext2D): void {
   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-  ctx.fillStyle = '#f7f1e3';
+  ctx.fillStyle = PAPER;
   ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 }
 
+/** Ink color for a player slot; pid 0 is an erase stroke and draws in paper color. */
+export function inkColor(pid: number, colors: Map<number, string>): string {
+  if (pid === 0) return PAPER;
+  return colors.get(pid) ?? '#888888';
+}
+
 export function drawSegment(
-  ctx: CanvasRenderingContext2D, color: string, pts: number[], prev: { x: number; y: number } | null, scale = 1,
+  ctx: CanvasRenderingContext2D, color: string, pts: number[], prev: { x: number; y: number } | null,
+  scale = 1, radius = BRUSH_RADIUS,
 ): void {
   if (pts.length < 2) return;
   ctx.strokeStyle = color;
   ctx.fillStyle = color;
-  ctx.lineWidth = BRUSH_RADIUS * 2 * scale;
+  ctx.lineWidth = radius * 2 * scale;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   if (!prev && pts.length === 2) {
     ctx.beginPath();
-    ctx.arc(pts[0]! * scale, pts[1]! * scale, BRUSH_RADIUS * scale, 0, Math.PI * 2);
+    ctx.arc(pts[0]! * scale, pts[1]! * scale, radius * scale, 0, Math.PI * 2);
     ctx.fill();
     return;
   }
@@ -39,10 +48,10 @@ export function drawFill(ctx: CanvasRenderingContext2D, color: string, poly: num
 }
 
 export function drawOps(
-  ctx: CanvasRenderingContext2D, ops: Op[], colorOf: (pid: number) => string, scale = 1,
+  ctx: CanvasRenderingContext2D, ops: Op[], colorOf: (pid: number) => string, scale = 1, radius = BRUSH_RADIUS,
 ): void {
   for (const op of ops) {
-    if (op.k === 's') drawSegment(ctx, colorOf(op.pid), op.pts, null, scale);
+    if (op.k === 's') drawSegment(ctx, colorOf(op.pid), op.pts, null, scale, radius);
     else drawFill(ctx, colorOf(op.pid), op.poly, scale);
   }
 }

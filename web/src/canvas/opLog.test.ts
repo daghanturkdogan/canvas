@@ -3,10 +3,12 @@ import { OpLog } from './opLog';
 import type { Op, RoundInfo, ServerMsg } from '@gallery/shared';
 
 const round: RoundInfo = {
-  idx: 1, mode: 'paint', modeName: 'Paint War', rules: 'r', phase: 'playing', startsAt: 0, overAt: 900, endsAt: 1000,
+  idx: 1, mode: 'paint', modeName: 'Paint War', rules: 'r', howTo: ['a'], brush: 6, phase: 'playing',
+  startsAt: 0, overAt: 900, endsAt: 1000,
+  next: { mode: 'splat', name: 'Splat', rules: 'r', howTo: ['b'], brush: 20 },
 };
 const welcome = (ops: Op[]): ServerMsg => ({
-  t: 'welcome', serverNow: 0, you: 1, players: [], round, winnerPid: null, ops, shares: {}, history: [],
+  t: 'welcome', serverNow: 0, you: 1, players: [], round, winnerPid: null, ops, shares: {}, history: [], modeState: null,
 });
 
 describe('OpLog', () => {
@@ -71,5 +73,11 @@ describe('OpLog', () => {
     log.apply({ t: 'scores', shares: { 1: 0.5 } });
     log.apply({ t: 'players', players: [] });
     expect(log.snapshot()).toEqual([]);
+  });
+
+  it('keeps erase strokes (pid 0) like any other stroke', () => {
+    const log = new OpLog();
+    log.apply({ t: 'stroke', id: 'e', pid: 0, pts: [1, 1, 2, 2] });
+    expect(log.snapshot()).toEqual([{ k: 's', id: 'e', pid: 0, pts: [1, 1, 2, 2] }]);
   });
 });
