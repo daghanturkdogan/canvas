@@ -15,6 +15,11 @@ describe('MODE_DEFS', () => {
     }
   });
 
+  it('marks fog and gives the eraser mode a wider erase brush', () => {
+    expect(MODE_DEFS.fog.fog).toBe(true);
+    expect(MODE_DEFS.eraser.eraseBrush).toBeGreaterThan(MODE_DEFS.eraser.brush);
+  });
+
   it('gives Splat a much bigger brush than Paint War', () => {
     expect(MODE_DEFS.splat.brush).toBeGreaterThanOrEqual(MODE_DEFS.paint.brush * 3);
   });
@@ -36,7 +41,22 @@ describe('nextModeInfo', () => {
 describe('overlayShapes', () => {
   const round = { idx: 4, startsAt: 0, overAt: 50_000 };
   it('returns nothing for modes without an overlay', () => {
-    for (const id of MODE_ORDER) expect(overlayShapes(MODE_DEFS[id], round, 1000, null)).toEqual([]);
+    for (const id of ['paint', 'splat', 'enclose', 'fog', 'eraser', 'teams'] as const) {
+      expect(overlayShapes(MODE_DEFS[id], round, 1000, null)).toEqual([]);
+    }
+  });
+
+  it('gives the zone modes real overlays', () => {
+    expect(overlayShapes(MODE_DEFS.hotzones, round, 1000, null).length).toBe(3);
+    expect(overlayShapes(MODE_DEFS.shrink, round, 1000, null)[0]!.kind).toBe('ring');
+    expect(overlayShapes(MODE_DEFS.hill, round, 1000, null).length).toBe(1);
+    expect(overlayShapes(MODE_DEFS.ctf, round, 1000, { n: 0 }).length).toBe(1);
+  });
+
+  it('moves the flag after a capture', () => {
+    const a = overlayShapes(MODE_DEFS.ctf, round, 1000, { n: 0 });
+    const b = overlayShapes(MODE_DEFS.ctf, round, 1000, { n: 1 });
+    expect(a).not.toEqual(b);
   });
 
   it('delegates to a definition that has an overlay function', () => {

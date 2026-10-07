@@ -1,11 +1,12 @@
-export type ModeId = 'paint' | 'splat' | 'enclose';
+export type ModeId =
+  | 'paint' | 'splat' | 'hotzones' | 'hill' | 'enclose' | 'ctf' | 'fog' | 'eraser' | 'shrink' | 'teams';
 export type ModeState = Record<string, unknown>;
 
 export interface StrokeOp { k: 's'; id: string; pid: number; pts: number[] }
 export interface FillOp { k: 'f'; pid: number; poly: number[] }
 export type Op = StrokeOp | FillOp;
 
-export interface PlayerInfo { pid: number; name: string; color: string; online: boolean; wins: number }
+export interface PlayerInfo { pid: number; name: string; color: string; online: boolean; wins: number; team?: number }
 
 export interface NextModeInfo { mode: ModeId; name: string; rules: string; howTo: string[]; brush: number }
 
@@ -34,7 +35,7 @@ export interface RoundSummary {
 
 export type ClientMsg =
   | { t: 'join'; clientId: string; name: string; password?: string }
-  | { t: 'stroke'; id: string; pts: number[]; end?: boolean }
+  | { t: 'stroke'; id: string; pts: number[]; end?: boolean; erase?: boolean }
   | { t: 'get-round'; idx: number };
 
 export type ServerMsg =
