@@ -1,5 +1,6 @@
-import { segIntersect, type Pt } from './geometry';
+import { polygonArea, segIntersect, type Pt } from './geometry';
 
+const MIN_LOOP_AREA = 1;
 const MAX_TRAIL = 3000;
 const KEEP_AFTER_TRIM = 1500;
 
@@ -31,9 +32,12 @@ export class LoopTrail {
       const x = segIntersect(a, p, this.pts[i]!, this.pts[i + 1]!);
       if (x) {
         const poly = [x, ...this.pts.slice(i + 1)];
+        // A new stroke that merely touches the end of an earlier one yields a zero-area "loop";
+        // ignore it and keep looking for a real crossing further back.
+        if (poly.length < 3 || polygonArea(poly) < MIN_LOOP_AREA) continue;
         this.pts = [x, p];
         this.breaks = new Set();
-        return poly.length >= 3 ? poly : null;
+        return poly;
       }
     }
     this.pts.push(p);

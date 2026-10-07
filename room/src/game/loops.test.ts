@@ -33,6 +33,16 @@ describe('LoopTrail', () => {
     expect(polys.length).toBeGreaterThanOrEqual(1);
   });
 
+  it('closes a triangle drawn as three strokes that each start where the last ended', () => {
+    const t = new LoopTrail();
+    feed(t, [P(0, 0), P(200, 0)]);
+    feed(t, [P(200, 0), P(100, 150)]);
+    // third stroke starts on the end of the second (touching it) and crosses the first at (100, 0)
+    const polys = feed(t, [P(100, 150), P(100, -50)]);
+    expect(polys.length).toBe(1);
+    expect(polygonArea(polys[0]!)).toBeCloseTo(7500, 0);
+  });
+
   it('does not treat the bridge between two strokes as a line to cross', () => {
     const t = new LoopTrail();
     feed(t, [P(0, 0), P(10, 0)]);
