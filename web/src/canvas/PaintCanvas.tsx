@@ -87,7 +87,8 @@ export function PaintCanvas({ send, subscribe, players, you, enabled, cursors }:
   const onMove = (e: React.PointerEvent) => {
     const d = draw.current;
     if (!d) return;
-    if (!enabledRef.current) return onUp();
+    // A missed pointerup (released outside the window, capture lost) must not leave the pen down.
+    if (!enabledRef.current || e.buttons === 0) return onUp();
     const p = toCanvas(e);
     const key = `${youRef.current}:${d.id}`;
     drawSegment(ctx(), colorOf(youRef.current!), [p.x, p.y], lastPt.current.get(key) ?? null);
@@ -116,6 +117,7 @@ export function PaintCanvas({ send, subscribe, players, you, enabled, cursors }:
       onPointerMove={onMove}
       onPointerUp={onUp}
       onPointerCancel={onUp}
+      onLostPointerCapture={onUp}
     />
   );
 }
