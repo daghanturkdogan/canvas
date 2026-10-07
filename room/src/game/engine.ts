@@ -1,11 +1,11 @@
 import {
   CANVAS_H, CANVAS_W, GRID_H, GRID_W, HISTORY_LIMIT, MAX_FILL_SHARE, MAX_OPS_POINTS,
-  MAX_PTS_PER_MSG, MIN_FILL_CELLS, NAME_MAX, OP_CHUNK, PALETTE, modeForRound, phaseAt,
-  type ModeState, type Op, type PlayerInfo, type RoundInfo, type RoundSummary, type ServerMsg,
+  MAX_PTS_PER_MSG, MIN_FILL_CELLS, NAME_MAX, OP_CHUNK, PALETTE, phaseAt, scheduledMode,
+  type ModeId, type ModeState, type Op, type PlayerInfo, type RoundInfo, type RoundSummary, type ServerMsg,
 } from '@gallery/shared';
 import { decimate, type Pt } from './geometry';
 import { LoopTrail } from './loops';
-import { REGISTRY, type ModeEntry } from './modes';
+import { REGISTRY, type ModeApi, type ModeEntry, type RoundRef } from './modes';
 import { OwnershipGrid } from './ownership';
 import type { EngineConfig, Outbound, PlayerState } from './types';
 import type { PersistedPlayer, Store } from '../store/store';
@@ -37,8 +37,13 @@ export class GameEngine {
   private scoresDirty = true;
   private modeStateDirty = false;
   private idCounter = 0;
+  private clockNow = 0;
+  readonly modeApi: ModeApi;
 
   constructor(readonly cfg: EngineConfig, private store: Store, now: number) {
+    const self = this;
+    this.modeApi = { get state() { return self.modeState; }, setState: (n) => self.setModeState(n) };
+    this.clockNow = now;
     this.restore();
     this.advance(now);
   }
@@ -53,6 +58,7 @@ export class GameEngine {
     if (this.cfg.password && password !== this.cfg.password) {
       return [{ to: only, msg: { t: 'error', reason: 'bad-password' } }];
     }
+    this.clockNow = now;
     const out = this.advance(now);
     const name = sanitizeName(rawName);
     let p = this.players.get(clientId);
@@ -67,6 +73,9 @@ export class GameEngine {
     p.online = true;
     p.lastSeen = now;
     this.metaDirty = true;
+    this.entry(this.roundIdx).rules.onJoin?.({
+      player: p, players: [...this.players.values()], now, round: this.roundRef(), api: this.modeApi,
+    });
     out.push({ to: only, msg: this.welcome(p, now) });
     out.push({ to: 'all', msg: { t: 'players', players: this.playerInfos() } });
     return out;
@@ -89,10 +98,11 @@ export class GameEngine {
     const p = this.players.get(clientId);
     if (!p || !p.online) return [];
     if (!this.take(p, now)) return [];
+    this.clockNow = now;
     const out = this.advance(now);
     if (phaseAt(now, this.cfg.roundMs, this.cfg.overMs).phase !== 'playing') return out;
 
-    const m = raw as { id?: unknown; pts?: unknown; end?: unknown } | null;
+    const m = raw as { id?: unknown; pts?: unknown; end?: unknown; erase?: unknown } | null;
     if (!m || typeof m !== 'object') return out;
     if (typeof m.id !== 'string' || m.id.length === 0 || m.id.length > 40) return out;
     if (!Array.isArray(m.pts) || m.pts.length < 2 || m.pts.length % 2 !== 0 || m.pts.length > MAX_PTS_PER_MSG * 2) return out;
@@ -110,7 +120,9 @@ export class GameEngine {
 
     const entry = this.entry(this.roundIdx);
     const runs = entry.rules.filterPoints
-      ? entry.rules.filterPoints({ player: p, pts, now, roundIdx: this.roundIdx }).filter((r) => r.length > 0)
+      ? entry.rules.filterPoints({
+          player: p, pts, now, roundIdx: this.roundIdx, round: this.roundRef(), api: this.modeApi,
+        }).filter((r) => r.length > 0)
       : [pts];
     if (runs.length === 0) {
       p.curStroke = null;
@@ -118,11 +130,12 @@ export class GameEngine {
       return out;
     }
 
+    const wantsErase = m.erase === true && entry.rules.allowsErase === true;
     let continuing = p.curStroke === m.id && p.curOpId != null && this.strokeIdx.has(`${p.slot}:${p.curOpId}`);
     let opId = continuing ? p.curOpId! : m.id;
     for (const run of runs) {
       if (!continuing) opId = this.freshId(p.slot, m.id);
-      this.applyRun(p, opId, run, !continuing, entry, out, clientId);
+      this.applyRun(p, opId, run, !continuing, wantsErase, entry, out, clientId);
       continuing = false; // any later run in this batch comes after a gap
     }
 
@@ -139,10 +152,13 @@ export class GameEngine {
   }
 
   private applyRun(
-    p: PlayerState, opId: string, pts: Pt[], newStroke: boolean, entry: ModeEntry, out: Outbound[], clientId: string,
+    p: PlayerState, opId: string, pts: Pt[], newStroke: boolean, wantsErase: boolean, entry: ModeEntry,
+    out: Outbound[], clientId: string,
   ): void {
-    const owner = entry.rules.erases ? 0 : p.slot;
     const key = `${p.slot}:${opId}`;
+    const existingOp = newStroke ? null : (this.ops[this.strokeIdx.get(key)!] as Extract<Op, { k: 's' }>);
+    const owner = existingOp ? existingOp.pid : (entry.rules.erases || wantsErase ? 0 : p.slot);
+    const brush = owner === 0 ? (entry.def.eraseBrush ?? entry.def.brush) : entry.def.brush;
     let opIndex: number;
     let prev: Pt | null = null;
     if (newStroke) {
@@ -162,13 +178,16 @@ export class GameEngine {
 
     const path = prev ? [prev, ...pts] : pts;
     for (let i = 1; i < path.length; i++) p.stats.ink += Math.hypot(path[i]!.x - path[i - 1]!.x, path[i]!.y - path[i - 1]!.y);
-    p.stats.overdraw += this.grid.stampPath(owner, path, entry.def.brush);
+    p.stats.overdraw += this.grid.stampPath(owner, path, brush);
     this.scoresDirty = true;
     this.metaDirty = true;
 
     out.push({ to: { except: clientId }, msg: { t: 'stroke', id: opId, pid: owner, pts: flat } });
 
-    for (const poly of entry.rules.onPoints({ player: p, pts, newStroke })) this.applyFill(p, poly, out);
+    const polys = entry.rules.onPoints({
+      player: p, pts, newStroke, now: this.clockNow, round: this.roundRef(), api: this.modeApi,
+    });
+    for (const poly of polys) this.applyFill(p, poly, out);
   }
 
   private applyFill(p: PlayerState, poly: Pt[], out: Outbound[]): void {
@@ -180,6 +199,9 @@ export class GameEngine {
     const flat = rounded.flatMap((q) => [q.x, q.y]);
     this.pushOp({ k: 'f', pid: p.slot, poly: flat });
     out.push({ to: 'all', msg: { t: 'fill', pid: p.slot, poly: flat } });
+    this.entry(this.roundIdx).rules.onFill?.({
+      player: p, poly: rounded, now: this.clockNow, round: this.roundRef(), api: this.modeApi,
+    });
   }
 
   // ---- mode state ---------------------------------------------------------------
@@ -193,6 +215,7 @@ export class GameEngine {
   // ---- clock -------------------------------------------------------------------
 
   tick(now: number): Outbound[] {
+    this.clockNow = now;
     const out = this.advance(now);
     if (this.scoresDirty) {
       this.scoresDirty = false;
@@ -201,6 +224,9 @@ export class GameEngine {
     if (this.modeStateDirty) {
       this.modeStateDirty = false;
       out.push({ to: 'all', msg: { t: 'mode-state', idx: this.roundIdx, state: this.modeState } });
+      if (this.entry(this.roundIdx).rules.playerInfo) {
+        out.push({ to: 'all', msg: { t: 'players', players: this.playerInfos() } });
+      }
     }
     return out;
   }
@@ -238,14 +264,25 @@ export class GameEngine {
 
   // ---- internals -----------------------------------------------------------------
 
+  private modeIdAt(idx: number): ModeId {
+    return this.cfg.order ? this.cfg.order[idx % this.cfg.order.length]! : scheduledMode(idx);
+  }
+
   private entry(idx: number): ModeEntry {
     const reg = this.cfg.registry ?? REGISTRY;
-    return reg[modeForRound(idx, this.cfg.order)]!;
+    return reg[this.modeIdAt(idx)]!;
+  }
+
+  private roundRef(): RoundRef {
+    const w = phaseAt(this.clockNow, this.cfg.roundMs, this.cfg.overMs);
+    return { idx: this.roundIdx, startsAt: w.startsAt, overAt: w.overAt };
   }
 
   private scores(): Record<number, number> {
     const { rules } = this.entry(this.roundIdx);
-    return rules.score ? rules.score({ grid: this.grid, players: [...this.players.values()] }) : this.grid.shares();
+    return rules.score
+      ? rules.score({ grid: this.grid, players: [...this.players.values()], state: this.modeState, roundIdx: this.roundIdx })
+      : this.grid.shares();
   }
 
   private freshId(slot: number, id: string): string {
@@ -288,7 +325,8 @@ export class GameEngine {
     this.winnerPid = null;
     this.scoresDirty = true;
     const init = this.entry(idx).rules.init;
-    this.modeState = init ? init({ roundIdx: idx }) : null;
+    const online = [...this.players.values()].filter((pl) => pl.online);
+    this.modeState = init ? init({ roundIdx: idx, players: online }) : null;
     this.modeStateDirty = this.modeState !== null;
     for (const p of this.players.values()) {
       p.trail.reset();
@@ -314,10 +352,10 @@ export class GameEngine {
     const winnerPlayer = [...this.players.values()].find((p) => p.slot === winner);
     if (winnerPlayer) winnerPlayer.wins++;
     const players: RoundSummary['players'] = {};
-    for (const p of this.players.values()) if (shares[p.slot] !== undefined) players[p.slot] = { name: p.name, color: p.color };
+    for (const info of this.playerInfos()) if (shares[info.pid] !== undefined) players[info.pid] = { name: info.name, color: info.color };
     const summary: RoundSummary = {
       idx: this.roundIdx,
-      mode: modeForRound(this.roundIdx, this.cfg.order),
+      mode: this.modeIdAt(this.roundIdx),
       endedAt: (this.roundIdx + 1) * this.cfg.roundMs,
       winnerPid: winner,
       shares,
@@ -349,13 +387,13 @@ export class GameEngine {
     const entry = this.entry(meta.roundIdx);
     this.modeState = meta.modeState !== undefined
       ? meta.modeState
-      : (entry.rules.init?.({ roundIdx: meta.roundIdx }) ?? null);
+      : (entry.rules.init?.({ roundIdx: meta.roundIdx, players: [] }) ?? null);
     this.ops = this.store.loadOpChunks(meta.roundIdx);
     for (const op of this.ops) {
       if (op.k === 's') {
         const pts: Pt[] = [];
         for (let i = 0; i < op.pts.length; i += 2) pts.push({ x: op.pts[i]!, y: op.pts[i + 1]! });
-        this.grid.stampPath(op.pid, pts, entry.def.brush);
+        this.grid.stampPath(op.pid, pts, op.pid === 0 ? (entry.def.eraseBrush ?? entry.def.brush) : entry.def.brush);
         this.opPoints += pts.length;
       } else {
         const poly: Pt[] = [];
@@ -409,9 +447,12 @@ export class GameEngine {
   }
 
   private playerInfos(): PlayerInfo[] {
-    return [...this.players.values()]
-      .sort((a, b) => a.slot - b.slot)
-      .map((p) => ({ pid: p.slot, name: p.name, color: p.color, online: p.online, wins: p.wins }));
+    const players = [...this.players.values()].sort((a, b) => a.slot - b.slot);
+    const view = this.entry(this.roundIdx).rules.playerInfo;
+    return players.map((p) => {
+      const info: PlayerInfo = { pid: p.slot, name: p.name, color: p.color, online: p.online, wins: p.wins };
+      return view ? view(info, { state: this.modeState, players, roundIdx: this.roundIdx }) : info;
+    });
   }
 
   private welcome(p: PlayerState, now: number): ServerMsg {

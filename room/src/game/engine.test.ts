@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { GameEngine } from './engine';
 import { MemoryStore } from '../store/memoryStore';
-import { MODE_DEFS, PALETTE, type ModeId, type ServerMsg } from '@gallery/shared';
+import { MODE_DEFS, PALETTE, scheduledMode, type ModeId, type PlayerInfo, type ServerMsg } from '@gallery/shared';
 import type { ModeEntry } from './modes';
 import type { Pt } from './geometry';
 import type { Outbound } from './types';
@@ -384,5 +384,119 @@ describe('framework hooks (fake modes)', () => {
     e.flush();
     const r = new GameEngine(fakeCfg(reg, ['base']), store, 50);
     expect(r.modeState).toEqual({ flag: [9, 9] });
+  });
+});
+
+describe('framework hooks v2 (fake modes)', () => {
+  const base: ModeEntry = { def: fakeDef('base'), rules: { id: 'paint', name: 'base', rules: 'r', onPoints: () => [] } };
+  const square = [{ x: 400, y: 400 }, { x: 600, y: 400 }, { x: 600, y: 600 }, { x: 400, y: 600 }];
+
+  it('passes now, the round and a working state api to onPoints', () => {
+    let seen: { now: number; idx: number } | null = null;
+    const rules = {
+      ...base.rules,
+      onPoints: (ctx: { now: number; round: { idx: number }; api: { setState(s: Record<string, unknown>): void } }) => {
+        seen = { now: ctx.now, idx: ctx.round.idx };
+        ctx.api.setState({ touched: true });
+        return [];
+      },
+    };
+    const e = new GameEngine(fakeCfg({ base: { def: fakeDef('base'), rules } }, ['base']), new MemoryStore(), 0);
+    e.join(id(1), 'Ann', undefined, 0);
+    e.onStroke(id(1), stroke('s', [100, 100, 200, 100]), 123);
+    expect(seen).toEqual({ now: 123, idx: 0 });
+    const out = e.tick(130);
+    expect(of(out, 'mode-state')[0]!.msg.state).toEqual({ touched: true });
+  });
+
+  it('calls onFill with the polygon after a fill is applied', () => {
+    const fills: number[] = [];
+    const rules = {
+      ...base.rules,
+      onPoints: () => [square],
+      onFill: ({ poly }: { poly: { x: number; y: number }[] }) => { fills.push(poly.length); },
+    };
+    const e = new GameEngine(fakeCfg({ base: { def: fakeDef('base'), rules } }, ['base']), new MemoryStore(), 0);
+    e.join(id(1), 'Ann', undefined, 0);
+    e.onStroke(id(1), stroke('s', [100, 100, 200, 100]), 100);
+    expect(fills).toEqual([4]);
+  });
+
+  it('calls onJoin and lets it set state; init receives the online players', () => {
+    const initCounts: number[] = [];
+    const rules = {
+      ...base.rules,
+      init: ({ players }: { players: unknown[] }) => { initCounts.push(players.length); return { joined: 0 }; },
+      onJoin: ({ api }: { api: { state: Record<string, unknown> | null; setState(s: Record<string, unknown>): void } }) => {
+        api.setState({ joined: Number(api.state?.joined ?? 0) + 1 });
+      },
+    };
+    const reg = { base: { def: fakeDef('base'), rules } };
+    const e = new GameEngine(fakeCfg(reg, ['base', 'base']), new MemoryStore(), 0);
+    e.join(id(1), 'Ann', undefined, 0);
+    e.join(id(2), 'Bob', undefined, 0);
+    expect(e.modeState).toEqual({ joined: 2 });
+    e.tick(1000); // next round: init sees both online players
+    expect(initCounts[initCounts.length - 1]).toBe(2);
+  });
+
+  it('applies a playerInfo override and re-emits players when state changes', () => {
+    const rules = {
+      ...base.rules,
+      init: () => ({ x: 1 }),
+      playerInfo: (info: PlayerInfo) => ({ ...info, color: '#123456', team: 1 }),
+    };
+    const reg = { base: { def: fakeDef('base'), rules } };
+    const e = new GameEngine(fakeCfg(reg, ['base']), new MemoryStore(), 0);
+    const w = of(e.join(id(1), 'Ann', undefined, 0), 'welcome')[0]!.msg;
+    expect(w.players[0]!.color).toBe('#123456');
+    expect(w.players[0]!.team).toBe(1);
+    e.tick(10); // flush the initial state emission
+    e.setModeState({ x: 2 });
+    expect(of(e.tick(20), 'players').length).toBe(1);
+  });
+
+  it('honors the erase flag only in modes that allow erasing, with the erase brush', () => {
+    const rules = { ...base.rules, allowsErase: true };
+    const def = { ...fakeDef('base'), eraseBrush: 20 };
+    const reg = { base: { def, rules } };
+    const e = new GameEngine(fakeCfg(reg, ['base']), new MemoryStore(), 0);
+    e.join(id(1), 'Ann', undefined, 0);
+    e.onStroke(id(1), stroke('a', [100, 100, 400, 100], true), 100);
+    const painted = shareOf(e);
+    e.onStroke(id(1), { t: 'stroke', id: 'b', pts: [100, 100, 400, 100], end: true, erase: true }, 200);
+    const eraseOp = e.ops[1]!;
+    expect(eraseOp.k === 's' ? eraseOp.pid : -1).toBe(0);
+    expect(shareOf(e)).toBe(0);
+    expect(painted).toBeGreaterThan(0);
+
+    const plain = new GameEngine(fakeCfg({ base: { def: fakeDef('base'), rules: base.rules } }, ['base']), new MemoryStore(), 0);
+    plain.join(id(1), 'Ann', undefined, 0);
+    plain.onStroke(id(1), { t: 'stroke', id: 'b', pts: [100, 100, 400, 100], end: true, erase: true }, 100);
+    const op = plain.ops[0]!;
+    expect(op.k === 's' ? op.pid : -1).toBe(plain.players.get(id(1))!.slot);
+  });
+
+  it('rebuilds erase strokes with the erase brush after a restart', () => {
+    const rules = { ...base.rules, allowsErase: true };
+    const def = { ...fakeDef('base'), eraseBrush: 20 };
+    const reg = { base: { def, rules } };
+    const store = new MemoryStore();
+    const e = new GameEngine(fakeCfg(reg, ['base']), store, 0);
+    e.join(id(1), 'Ann', undefined, 0);
+    e.onStroke(id(1), stroke('fill', [100, 60, 700, 60, 700, 140, 100, 140, 100, 100, 700, 100], true), 100);
+    e.onStroke(id(1), { t: 'stroke', id: 'x', pts: [200, 100, 600, 100], end: true, erase: true }, 200);
+    e.flush();
+    const r = new GameEngine(fakeCfg(reg, ['base']), store, 300);
+    expect(r.grid.shares()).toEqual(e.grid.shares());
+  });
+
+  it('follows the random schedule when no cyclic order is configured', () => {
+    const e = new GameEngine({ roundMs: 1000, overMs: 100, password: '' }, new MemoryStore(), 0);
+    const w = of(e.join(id(1), 'Ann', undefined, 0), 'welcome')[0]!.msg;
+    expect(w.round.mode).toBe(scheduledMode(0));
+    expect(w.round.next.mode).toBe(scheduledMode(1));
+    const next = of(e.tick(1000), 'round')[0]!.msg;
+    expect(next.round.mode).toBe(scheduledMode(1));
   });
 });

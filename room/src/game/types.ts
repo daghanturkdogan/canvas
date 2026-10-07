@@ -27,7 +27,8 @@ export interface Outbound { to: Target; msg: ServerMsg }
 export interface EngineConfig {
   roundMs: number;
   overMs: number;
-  order: readonly ModeId[];
+  /** Cyclic mode order (tests). Omit to use the random no-repeat schedule. */
+  order?: readonly ModeId[];
   password: string;
   /** Test hook: replaces the built-in mode registry. */
   registry?: Record<string, ModeEntry>;
